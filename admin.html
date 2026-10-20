@@ -1,0 +1,129 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <title>SUN REWARD — Admin</title>
+  <link rel="stylesheet" href="admin.css">
+  <script src="admin.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">
+      <span class="sun">☀</span>
+      <span>SUN REWARD <small>ADMIN PANEL</small></span>
+    </a>
+    <span class="badge">PRIVATE ACCESS</span>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <p class="eyebrow">CONTROL CENTER</p>
+      <h1>Admin Dashboard</h1>
+      <p>Manage withdrawal requests and VIP membership.</p>
+    </section>
+
+    <section class="panel auth-panel">
+      <h2>Administrator access</h2>
+      <p class="muted">
+        Enter your server ADMIN_KEY. It is kept in this page's memory
+        and is not saved to browser storage.
+      </p>
+      <form id="login-form">
+        <label for="admin-key">Admin key</label>
+        <input id="admin-key" type="password"
+          autocomplete="current-password" required
+          placeholder="Enter your ADMIN_KEY">
+        <div class="actions">
+          <button class="primary" type="submit">Connect</button>
+          <button class="secondary" id="logout-btn" type="button">
+            Disconnect
+          </button>
+        </div>
+      </form>
+      <p id="connection-status" class="status" role="status">
+        Not connected
+      </p>
+    </section>
+
+    <section class="stats">
+      <article class="stat panel">
+        <span>Pending requests</span>
+        <strong id="pending-count">—</strong>
+      </article>
+      <article class="stat panel">
+        <span>Total requests loaded</span>
+        <strong id="total-count">—</strong>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">PAYOUT REVIEW</p>
+          <h2>Withdrawal requests</h2>
+        </div>
+        <button id="refresh-btn" class="secondary" type="button">
+          Refresh
+        </button>
+      </div>
+      <p class="muted">
+        Approve/Reject updates the request status only.
+        It does not transfer money or cryptocurrency.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Telegram ID</th>
+              <th>Points</th>
+              <th>Method</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="withdrawals-body">
+            <tr><td colspan="7" class="empty">
+              Connect to load requests.
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">MEMBERSHIP</p>
+      <h2>Grant or extend VIP</h2>
+      <p class="muted">
+        Only grant VIP after verifying payment or another approved reason.
+        This action does not process a payment.
+      </p>
+      <form id="vip-form">
+        <label for="telegram-id">Telegram user ID</label>
+        <input id="telegram-id" inputmode="numeric"
+          pattern="[0-9]{1,20}" required
+          placeholder="e.g. 123456789">
+        <label for="vip-days">VIP duration</label>
+        <select id="vip-days">
+          <option value="7">7 days</option>
+          <option value="30" selected>30 days</option>
+          <option value="90">90 days</option>
+          <option value="180">180 days</option>
+          <option value="365">365 days</option>
+        </select>
+        <button class="primary" type="submit">Grant VIP</button>
+      </form>
+      <p id="vip-result" class="status" role="status"></p>
+    </section>
+
+    <footer>
+      SUN REWARD Admin · Keep your admin key private.
+      <br>Use HTTPS and disconnect when finished.
+    </footer>
+  </main>
+</body>
+</html>
