@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101a35">
+  <title>SUN REWARD</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <div class="logo">☀</div>
+      <div><h1>SUN REWARD</h1><p>Tasks · Invite · Earn points</p></div>
+    </header>
+
+    <section class="balance card">
+      <p class="muted">YOUR POINTS</p>
+      <div class="points"><span id="points">—</span> <small>PTS</small></div>
+      <p id="hello" class="muted">Connecting to Telegram…</p>
+    </section>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="tasks">Tasks</button>
+      <button class="tab" data-tab="invite">Invite</button>
+      <button class="tab" data-tab="wallet">Rewards</button>
+    </nav>
+
+    <section id="tasks" class="panel">
+      <h2>Available tasks</h2>
+      <div id="task-list"><div class="card">Loading tasks…</div></div>
+      <button id="checkin" class="primary">Daily check-in (+5 points)</button>
+    </section>
+
+    <section id="invite" class="panel hidden">
+      <h2>Invite friends</h2>
+      <div class="card">
+        <p>Invite friends using your personal link. Points are added only when a new user opens the app through your link.</p>
+        <div class="refline"><input id="ref-link" readonly placeholder="Loading your link…"><button id="copy-ref">Copy</button></div>
+        <p class="muted">Referral reward: <strong id="ref-points">50</strong> points per eligible new user.</p>
+      </div>
+    </section>
+
+    <section id="wallet" class="panel hidden">
+      <h2>Rewards</h2>
+      <div class="card">
+        <p>Points are not cash and have no guaranteed monetary value. Withdrawals are requests for manual review only.</p>
+        <label for="withdraw-points">Points to request</label>
+        <input id="withdraw-points" type="number" min="1" inputmode="numeric" placeholder="Enter points">
+        <label for="withdraw-method">Preferred payout method (if offered)</label>
+        <select id="withdraw-method">
+          <option value="manual_review">Manual review</option>
+          <option value="TON">TON (not automatically paid)</option>
+          <option value="USDT">USDT (not automatically paid)</option>
+          <option value="KBZPay">KBZPay (not automatically paid)</option>
+          <option value="WavePay">WavePay (not automatically paid)</option>
+        </select>
+        <button id="withdraw" class="primary">Submit withdrawal request</button>
+        <p id="withdraw-note" class="muted"></p>
+      </div>
+      <h3>Recent activity</h3>
+      <div id="ledger"></div>
+    </section>
+
+    <footer>Build honestly. Never pay a fee to unlock a withdrawal.</footer>
+    <div id="toast" role="status" aria-live="polite"></div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
