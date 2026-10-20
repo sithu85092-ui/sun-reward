@@ -1,58 +1,65 @@
-# SUN REWARD — Telegram Mini App starter
+# SUN REWARD — Social Tasks/Admin patch
 
-A beginner-friendly starter for a Telegram Mini App with:
-- Telegram WebApp user sign-in (server validates Telegram `initData`)
-- task list and one-time task claims
-- referral links (`startapp=ref_<telegram_id>`)
-- points balance and ledger
-- withdrawal requests (requests only; no automatic money/crypto payout)
-- admin endpoints for approving tasks and reviewing withdrawals
+This patch is designed around the current public `main` branch of:
+https://github.com/sithu85092-ui/sun-reward
 
-## Important
-This is a starter project, not a finished money-making business. Points have no cash value until you fund and operate a legitimate reward program. Never promise withdrawals you cannot fund. Do not ask users to pay a deposit, tax, or VIP fee to withdraw.
+It does NOT modify GitHub or deploy anything automatically. Commit the changes yourself, then let Render redeploy.
 
-## Requirements
-- Node.js 20+
-- A Telegram bot created with @BotFather
-- A host that can run a persistent Node.js server and SQLite, or adapt the database layer for a managed database.
-- HTTPS public URL for Telegram Mini App.
+## Included
+- `server-social-tasks-patch.js`: database schema + API code for dynamic social tasks, editable TikTok/Telegram links, user proof submission, admin approval/rejection.
+- `admin.html`, `admin.css`, `admin.js`: small mobile-friendly admin panel.
+- `app-js-renderTasks-replacement.js`: replacement `renderTasks()` function for the existing app.js.
+- `README.md`: this guide.
 
-## Run locally
-1. Install Node.js on a computer/server (Android-only hosting is not the easiest path).
-2. Copy `.env.example` to `.env` and set:
-   - `BOT_TOKEN` to your bot token (keep secret; never commit it)
-   - `ADMIN_KEY` to a long random secret
-   - `APP_URL` to your HTTPS app URL
-3. Run:
-   ```sh
-   npm install
-   npm start
-   ```
-4. Open `http://localhost:3000` for a browser preview. Telegram login verification will only work with real Telegram WebApp `initData`.
-5. Deploy to a Node.js host that supports persistent storage. SQLite needs a persistent disk. If your host has ephemeral storage, use a managed database and adapt `server.js`.
+## Very important before editing
+1. Keep `data.sqlite`; do not delete it.
+2. In Render, make sure SQLite is on a persistent disk. Otherwise data may be lost on restart/redeploy.
+3. Never put `ADMIN_KEY` or `BOT_TOKEN` in frontend files or GitHub.
+4. Take a copy of your current files before changing them.
+5. This patch gives social-task points only after manual approval. It does not perform real money/crypto payouts or verify TikTok follows automatically.
 
-## Telegram setup
-In @BotFather:
-- `/setmenubutton` (or Bot Settings > Menu Button)
-- select your bot
-- set button text such as `Open App`
-- set the HTTPS URL from your deployment
+## A. server.js integration
+Current `server.js` on main is short and has a `taskList` constant and existing `/api/me` and `/api/tasks/:id/claim` routes.
 
-If BotFather asks for a Web App URL, it must be HTTPS.
+1. Open `server.js`.
+2. Keep the existing `const now = () => new Date().toISOString();`.
+3. In `server-social-tasks-patch.js`, copy the first section starting at `const socialTaskSchema =` through the two `INSERT OR IGNORE` seed settings lines. Paste it immediately AFTER the existing `const now = ...` line. Do not paste the opening comment again.
+4. Copy helper `validHttpUrl` and `publicTaskRows` too; paste after the seed settings.
+5. Find `const taskList = [{id:"daily"...` and remove that constant. Do not remove `DAILY_POINTS`.
+6. In `/api/me`, replace the current `tasks:taskList.map(...)` field with:
+   Before `res.json(...)`, add `const checkedInToday = Boolean(db.prepare("SELECT 1 FROM checkins WHERE telegram_id=? AND day=?").get(u.telegram_id, day()));` then use `tasks:[{id:"daily",title:"Daily check-in",description:"Claim your daily points once per day.",points:DAILY_POINTS,completed:checkedInToday,kind:"daily"}, ...publicTaskRows(u.telegram_id)]`
+   The existing `claimed` query may remain, but `task_claims` is no longer used for social tasks.
+7. Remove the old route `app.post("/api/tasks/:id/claim", ... )` entirely; it returns “No claimable task configured.” Keep `/api/checkin`.
+8. Copy the entire `ROUTES` section in `server-social-tasks-patch.js` (from `// Public social links.` to just before the end) into `server.js` after the existing admin routes and before `app.get("*",...)`.
+9. Make sure you do not duplicate `validHttpUrl`, `publicTaskRows`, or schema if you pasted those separately.
+10. Save and commit `server.js`.
 
-## Admin
-Use the `X-Admin-Key` header with your `ADMIN_KEY` for:
-- `GET /api/admin/withdrawals`
-- `POST /api/admin/withdrawals/:id` with JSON `{ "status": "approved" }` or `{ "status": "rejected" }`
+## B. app.js integration
+Open `app.js`, find `function renderTasks(tasks) {` (about line 1750 in current main). Replace that entire function up to just before `function renderLedger(rows)` with the content of `app-js-renderTasks-replacement.js`.
 
-This is a minimal admin API, not an admin dashboard. Review requests manually and keep records. Approval changes status only; it does not send money.
+## C. Add admin files
+Create these three files at the repository root:
+- `admin.html`
+- `admin.css`
+- `admin.js`
 
-## Included demo tasks
-The tasks are starter tasks. The server currently supports a daily check-in and referral bonus. Do not reward unverifiable actions like "join any channel" without adding server-side verification.
+Copy the matching included files exactly. Commit them.
 
-## Security checklist before public launch
-- Use a unique, long `ADMIN_KEY`.
-- Never put `BOT_TOKEN` or `ADMIN_KEY` in frontend files or GitHub.
-- Add rate limiting, monitoring, backups, privacy policy, and abuse controls.
-- Add proper task verification before awarding points.
-- Define clear reward terms and only offer withdrawals you can actually fund.
+## D. Open admin panel
+After Render finishes deploying, open:
+`https://sun-reward.onrender.com/admin.html`
+
+Paste your existing `ADMIN_KEY` into the panel input. The key is stored only in `sessionStorage` for the current browser tab/session. Do not send it to me or place it in frontend source code.
+
+## E. How to use
+1. Admin → Social Tasks: create/edit tasks and rewards, enable/disable tasks.
+2. Admin → Links: edit TikTok and Telegram URLs.
+3. Admin → Submissions: choose Pending and Approve/Reject.
+4. User visits task link, follows/joins, then submits a short proof note. Admin checks manually before approving.
+5. On approval, server credits points and records a ledger entry in one transaction. A submission cannot be approved twice.
+
+## Current limits
+- TikTok/Telegram membership is not verified automatically. Admin must check the proof.
+- Deleting a task is implemented as disable/archive to preserve submission history.
+- `ADMIN_KEY` must be set in Render environment variables.
+- This is a minimal admin panel, not full account/withdrawal/VIP management.
