@@ -1,71 +1,346 @@
+
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#101a35">
+  <meta name="description" content="SUN REWARD — Play, grow, earn points and explore rewards.">
   <title>SUN REWARD</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
   <main class="app">
+
+    <!-- HEADER -->
     <header class="top">
       <div class="logo">☀</div>
-      <div><h1>SUN REWARD</h1><p>Tasks · Invite · Earn points</p></div>
+      <div>
+        <h1>SUN REWARD</h1>
+        <p>Play · Grow · Earn</p>
+      </div>
+      <button id="language-btn" type="button" aria-label="Language">EN</button>
     </header>
 
+    <!-- BALANCE -->
     <section class="balance card">
-      <p class="muted">YOUR POINTS</p>
-      <div class="points"><span id="points">—</span> <small>PTS</small></div>
-      <p id="hello" class="muted">Connecting to Telegram…</p>
+      <p class="muted">YOUR COIN BALANCE</p>
+      <div class="points">
+        <span id="points">—</span>
+        <small>SUN</small>
+      </div>
+      <p id="hello" class="muted">Connecting to Telegram...</p>
+      <div class="balance-actions">
+        <button type="button" data-open-tab="wallet">Wallet</button>
+        <button type="button" data-open-tab="airdrop">Airdrop</button>
+      </div>
     </section>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="tasks">Tasks</button>
-      <button class="tab" data-tab="invite">Invite</button>
-      <button class="tab" data-tab="wallet">Rewards</button>
+    <!-- NAVIGATION -->
+    <nav class="tabs" aria-label="Main navigation">
+      <button class="tab active" data-tab="home" type="button">Home</button>
+      <button class="tab" data-tab="tasks" type="button">Tasks</button>
+      <button class="tab" data-tab="game" type="button">Tap</button>
+      <button class="tab" data-tab="plant" type="button">Plant</button>
+      <button class="tab" data-tab="spin" type="button">Spin</button>
+      <button class="tab" data-tab="shop" type="button">Shop</button>
+      <button class="tab" data-tab="invite" type="button">Invite</button>
+      <button class="tab" data-tab="vip" type="button">VIP</button>
+      <button class="tab" data-tab="wallet" type="button">Wallet</button>
+      <button class="tab" data-tab="airdrop" type="button">Airdrop</button>
+      <button class="tab" data-tab="profile" type="button">Profile</button>
     </nav>
 
-    <section id="tasks" class="panel">
-      <h2>Available tasks</h2>
-      <div id="task-list"><div class="card">Loading tasks…</div></div>
-      <button id="checkin" class="primary">Daily check-in (+5 points)</button>
-    </section>
-
-    <section id="invite" class="panel hidden">
-      <h2>Invite friends</h2>
+    <!-- HOME -->
+    <section id="home" class="panel">
+      <h2>Welcome to SUN REWARD</h2>
       <div class="card">
-        <p>Invite friends using your personal link. Points are added only when a new user opens the app through your link.</p>
-        <div class="refline"><input id="ref-link" readonly placeholder="Loading your link…"><button id="copy-ref">Copy</button></div>
-        <p class="muted">Referral reward: <strong id="ref-points">50</strong> points per eligible new user.</p>
+        <h3>Your journey</h3>
+        <p>Tap, complete tasks, invite friends and grow your virtual garden.</p>
+        <p id="account-status" class="muted">Checking account...</p>
+      </div>
+
+      <h3>Daily progress</h3>
+      <div class="card">
+        <p>Daily check-in</p>
+        <button id="checkin" class="primary" type="button">
+          Claim daily points
+        </button>
+      </div>
+
+      <h3>Featured activities</h3>
+      <div class="feature-grid">
+        <button class="card feature" data-open-tab="game" type="button">
+          <span>👆</span><strong>Tap & Earn</strong>
+        </button>
+        <button class="card feature" data-open-tab="plant" type="button">
+          <span>🌱</span><strong>Growing Plant</strong>
+        </button>
+        <button class="card feature" data-open-tab="spin" type="button">
+          <span>🎡</span><strong>Lucky Spin</strong>
+        </button>
+        <button class="card feature" data-open-tab="shop" type="button">
+          <span>🛍️</span><strong>Item Shop</strong>
+        </button>
       </div>
     </section>
 
-    <section id="wallet" class="panel hidden">
-      <h2>Rewards</h2>
+    <!-- TASKS -->
+    <section id="tasks" class="panel hidden">
+      <h2>Tasks & Missions</h2>
+      <p class="muted">Complete eligible tasks to earn points.</p>
+      <div id="task-list">
+        <div class="card">Loading tasks...</div>
+      </div>
+      <button id="task-refresh" class="secondary" type="button">
+        Refresh tasks
+      </button>
+    </section>
+
+    <!-- TAP TO EARN -->
+    <section id="game" class="panel hidden">
+      <h2>Tap to Earn</h2>
       <div class="card">
-        <p>Points are not cash and have no guaranteed monetary value. Withdrawals are requests for manual review only.</p>
+        <p class="muted">AVAILABLE ENERGY</p>
+        <h3><span id="energy">—</span> / <span id="energy-max">—</span></h3>
+        <progress id="energy-bar" value="0" max="100">0%</progress>
+        <p>Tap power: <strong id="tap-power">1</strong> SUN / tap</p>
+        <p class="muted">Energy regenerates over time when enabled.</p>
+      </div>
+
+      <div class="tap-area">
+        <button id="tap-button" class="tap-button" type="button"
+          aria-label="Tap to earn SUN coins">☀</button>
+        <p>Tap the Sun to collect coins</p>
+        <p id="tap-message" class="muted">Connect to your account to begin.</p>
+      </div>
+
+      <h3>Upgrade cards</h3>
+      <div id="upgrade-list">
+        <div class="card">Upgrade cards will appear here.</div>
+      </div>
+    </section>
+
+    <!-- PLANT -->
+    <section id="plant" class="panel hidden">
+      <h2>Growing Plant</h2>
+      <div class="card plant-scene">
+        <div id="plant-visual" class="plant-visual" aria-label="Plant">🌱</div>
+        <h3 id="plant-name">Your Garden</h3>
+        <p id="plant-stage" class="muted">Garden locked until requirements are met.</p>
+        <progress id="plant-progress" value="0" max="100">0%</progress>
+        <p>Growth: <strong id="plant-growth">0%</strong></p>
+      </div>
+
+      <div id="plant-lock" class="card">
+        <h3>🔒 Unlock your garden</h3>
+        <p>Invite 3 eligible friends and join our required Telegram channel.</p>
+        <p>Both conditions must be verified by the server.</p>
+        <a id="required-channel" href="#" target="_blank" rel="noopener">
+          Open required channel
+        </a>
+        <button id="verify-plant" class="primary" type="button">
+          Verify requirements
+        </button>
+        <p id="plant-lock-message" class="muted"></p>
+      </div>
+
+      <div id="plant-actions" class="card">
+        <h3>Garden actions</h3>
+        <button id="buy-seed" type="button">Buy seed</button>
+        <button id="plant-seed" type="button">Plant seed</button>
+        <button id="water-plant" type="button">Water plant</button>
+        <button id="harvest-plant" type="button">Harvest</button>
+        <p id="plant-message" class="muted"></p>
+      </div>
+    </section>
+
+    <!-- SPIN -->
+    <section id="spin" class="panel hidden">
+      <h2>Lucky Spin</h2>
+      <div class="card spin-scene">
+        <div id="spin-wheel" class="spin-wheel" aria-label="Prize wheel">
+          🎡
+        </div>
+        <p>Spin tickets: <strong id="spin-tickets">0</strong></p>
+        <p>Spin cost: <strong id="spin-cost">—</strong></p>
+        <button id="spin-button" class="primary" type="button">
+          Spin now
+        </button>
+        <p id="spin-result" class="muted">
+          Rewards and odds must be configured by the server.
+        </p>
+      </div>
+      <div id="spin-lock" class="card">
+        <h3>Spin requirements</h3>
+        <p id="spin-requirements">
+          Some spin modes may require VIP membership or a ticket.
+        </p>
+      </div>
+    </section>
+
+    <!-- SHOP -->
+    <section id="shop" class="panel hidden">
+      <h2>Item Shop</h2>
+      <div class="card">
+        <p>Buy seeds, spin tickets and game upgrades.</p>
+        <p class="muted">Available items and prices are set by the server.</p>
+      </div>
+      <div class="shop-filters">
+        <button type="button" data-shop-filter="all">All</button>
+        <button type="button" data-shop-filter="seed">Seeds</button>
+        <button type="button" data-shop-filter="ticket">Spin tickets</button>
+        <button type="button" data-shop-filter="upgrade">Upgrades</button>
+      </div>
+      <div id="shop-list">
+        <div class="card">Loading shop items...</div>
+      </div>
+      <h3>My inventory</h3>
+      <div id="inventory-list">
+        <div class="card">Your items will appear here.</div>
+      </div>
+    </section>
+
+    <!-- INVITE -->
+    <section id="invite" class="panel hidden">
+      <h2>Invite Friends</h2>
+      <div class="card">
+        <h3>Your referral link</h3>
+        <input id="ref-link" readonly placeholder="Loading your link...">
+        <button id="copy-ref" type="button">Copy referral link</button>
+        <p>Referral reward: <strong id="ref-points">50</strong> SUN</p>
+        <p>Verified referrals: <strong id="ref-count">0</strong></p>
+      </div>
+
+      <div class="card">
+        <h3>Feature unlock progress</h3>
+        <p>Growing Plant requires 3 eligible invited users and channel membership.</p>
+        <progress id="ref-progress" value="0" max="3">0%</progress>
+        <p id="ref-status" class="muted">Referral status has not been verified.</p>
+      </div>
+    </section>
+
+    <!-- VIP -->
+    <section id="vip" class="panel hidden">
+      <h2>VIP Membership</h2>
+      <div class="card">
+        <p>VIP status: <strong id="vip-status">Standard member</strong></p>
+        <p>Membership expiry: <strong id="vip-expiry">—</strong></p>
+        <p class="muted">
+          VIP benefits, prices and renewal rules must be displayed before purchase.
+        </p>
+      </div>
+
+      <div id="vip-plans">
+        <div class="card">
+          <h3>VIP plans</h3>
+          <p>Membership options will appear here when configured.</p>
+        </div>
+      </div>
+      <button id="vip-refresh" type="button">Refresh VIP status</button>
+    </section>
+
+    <!-- WALLET -->
+    <section id="wallet" class="panel hidden">
+      <h2>Wallet & Rewards</h2>
+      <div class="card">
+        <h3>TON Wallet</h3>
+        <p id="wallet-status">Not connected</p>
+        <button id="connect-wallet" class="primary" type="button">
+          Connect TON Wallet
+        </button>
+        <button id="disconnect-wallet" type="button">
+          Disconnect wallet
+        </button>
+        <p class="muted">
+          Never enter your seed phrase or private key into this app.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Withdrawal request</h3>
+        <p>Withdrawal eligibility: <strong id="withdraw-eligibility">Checking...</strong></p>
+        <p class="muted">
+          Requests are reviewed according to the published rules. Submission does not guarantee payment.
+        </p>
         <label for="withdraw-points">Points to request</label>
-        <input id="withdraw-points" type="number" min="1" inputmode="numeric" placeholder="Enter points">
-        <label for="withdraw-method">Preferred payout method (if offered)</label>
+        <input id="withdraw-points" type="number" min="1"
+          inputmode="numeric" placeholder="Enter points">
+
+        <label for="withdraw-method">Requested payout method</label>
         <select id="withdraw-method">
           <option value="manual_review">Manual review</option>
-          <option value="TON">TON (not automatically paid)</option>
-          <option value="USDT">USDT (not automatically paid)</option>
-          <option value="KBZPay">KBZPay (not automatically paid)</option>
-          <option value="WavePay">WavePay (not automatically paid)</option>
+          <option value="TON">TON (subject to approval)</option>
+          <option value="USDT">USDT (subject to approval)</option>
+          <option value="KBZPay">KBZPay (if supported)</option>
+          <option value="WavePay">WavePay (if supported)</option>
         </select>
-        <button id="withdraw" class="primary">Submit withdrawal request</button>
+
+        <button id="withdraw" class="primary" type="button">
+          Submit withdrawal request
+        </button>
         <p id="withdraw-note" class="muted"></p>
       </div>
+
       <h3>Recent activity</h3>
       <div id="ledger"></div>
     </section>
 
-    <footer>Build honestly. Never pay a fee to unlock a withdrawal.</footer>
+    <!-- AIRDROP -->
+    <section id="airdrop" class="panel hidden">
+      <h2>Airdrop Campaigns</h2>
+      <div class="card">
+        <p>View campaign deadlines, eligibility and claim status.</p>
+        <p class="muted">
+          Only officially announced campaigns are shown. Airdrop rewards are not guaranteed.
+        </p>
+      </div>
+      <div id="airdrop-list">
+        <div class="card">No campaign data loaded yet.</div>
+      </div>
+    </section>
+
+    <!-- PROFILE -->
+    <section id="profile" class="panel hidden">
+      <h2>My Profile</h2>
+      <div class="card profile-card">
+        <img id="profile-photo" alt="Profile photo" src=""
+          style="display:none;width:88px;height:88px;border-radius:50%;object-fit:cover;margin:0 auto 14px">
+        <div id="profile-avatar" class="profile-avatar">☀</div>
+
+        <h3 id="profile-name">Loading profile...</h3>
+        <p class="muted">SUN REWARD Member</p>
+
+        <div class="profile-details">
+          <p>Telegram User ID</p>
+          <strong id="profile-id">—</strong>
+
+          <p>Username</p>
+          <strong id="profile-username">Not available</strong>
+
+          <p>Coin balance</p>
+          <strong><span id="profile-points">0</span> SUN</strong>
+
+          <p>Account created</p>
+          <strong id="profile-created">—</strong>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+      <p>SUN REWARD</p>
+      <p>Play fairly. Protect your account. Never pay a fee to unlock a withdrawal.</p>
+      <a id="support-link" href="#" target="_blank" rel="noopener">Support</a>
+      <span> · </span>
+      <a id="rules-link" href="#" target="_blank" rel="noopener">Rules</a>
+    </footer>
+
     <div id="toast" role="status" aria-live="polite"></div>
   </main>
+
   <script src="app.js"></script>
 </body>
-</html>
+        </html>
+        
