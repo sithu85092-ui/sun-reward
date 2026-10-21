@@ -19,6 +19,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN || "";
 const BOT_USERNAME = (process.env.BOT_USERNAME || "").replace(/^@/, "");
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const REQUIRED_CHANNEL = process.env.REQUIRED_CHANNEL || "";
+const TON_CONNECT_MANIFEST_URL = process.env.TON_CONNECT_MANIFEST_URL || "";
 const REFERRAL_POINTS = Math.max(0, Number(process.env.POINTS_PER_REFERRAL || 50));
 const DAILY_POINTS = Math.max(0, Number(process.env.DAILY_CHECKIN_POINTS || 5));
 const MIN_WITHDRAWAL = Math.max(1, Number(process.env.MIN_WITHDRAWAL_POINTS || 1000));
@@ -106,6 +107,8 @@ addColumnIfMissing("users", "spin_tickets", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfMissing("users", "plant_stage", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfMissing("users", "plant_growth", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfMissing("users", "plant_planted_at", "TEXT");
+addColumnIfMissing("users", "wallet_address", "TEXT");
+addColumnIfMissing("users", "wallet_chain", "TEXT");
 
 const now = () => new Date().toISOString();
 const utcDay = () => new Date().toISOString().slice(0, 10);
@@ -250,13 +253,35 @@ function requirePlantAccess(req,res) {
   return user;
 }
 const shopItems = [
-  {id:"seed",title:"Plant Seed",cost:SEED_COST},
-  {id:"spin_ticket",title:"Spin Ticket",cost:SPIN_TICKET_COST},
-  {id:"tap_upgrade",title:"Tap Power Upgrade",cost:UPGRADE_COST}
+  {id:"seed",title:"Plant Seed",description:"A seed for your garden. Plant it after unlocking garden access.",cost:SEED_COST,category:"item"},
+  {id:"spin_ticket",title:"Spin Ticket",description:"Try your luck for extra SUN points.",cost:SPIN_TICKET_COST,category:"item"},
+  {id:"energy_refill",title:"Energy Refill",description:"Restore your energy to the maximum instantly.",cost:150,category:"item"},
+  {id:"tap_upgrade",title:"Tap Power +1",description:"Permanently earn one more SUN per tap.",cost:UPGRADE_COST,category:"upgrade"},
+  {id:"tap_upgrade_5",title:"Tap Power +5",description:"A bigger permanent boost for active players.",cost:1000,category:"upgrade"}
 ];
 
 // Serve frontend after API routes have been registered.
 app.get("/health",(req,res)=>res.json({ok:true,app:"SUN REWARD"}));
+app.get("/api/public-config",(req,res)=>res.json({tonConnectManifestUrl:TON_CONNECT_MANIFEST_URL}));
+app.get("/api/wallet",auth,(req,res)=>{
+  const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
+  res.json({wallet:{address:user.wallet_address||null,chain:user.wallet_chain||null}});
+});
+app.post("/api/wallet/connect",auth,(req,res)=>{
+  const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
+  const address=String(req.body?.address||"").trim();
+  const chain=String(req.body?.chain||"").slice(0,32);
+  const raw=/^-?\d+:[a-fA-F0-9]{64}$/.test(address);
+  const friendly=/^[A-Za-z0-9_-]{48}$/.test(address);
+  if(address.length>128||(!raw&&!friendly))return res.status(400).json({error:"Invalid TON wallet address received from TON Connect."});
+  db.prepare("UPDATE users SET wallet_address=?,wallet_chain=? WHERE telegram_id=?").run(address,chain,user.telegram_id);
+  res.json({ok:true,wallet:{address,chain},message:"TON wallet linked to your profile."});
+});
+app.post("/api/wallet/disconnect",auth,(req,res)=>{
+  const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
+  db.prepare("UPDATE users SET wallet_address=NULL,wallet_chain=NULL WHERE telegram_id=?").run(user.telegram_id);
+  res.json({ok:true,message:"Wallet disconnected from your profile."});
+});
 app.get("/api/me",auth,async(req,res)=>{
   try {
     let user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
@@ -374,7 +399,9 @@ app.post("/api/shop/buy",auth,(req,res)=>{
       db.prepare("UPDATE users SET points=points-? WHERE telegram_id=?").run(item.cost,user.telegram_id);
       if(item.id==="seed")db.prepare("UPDATE users SET seeds=seeds+1 WHERE telegram_id=?").run(user.telegram_id);
       if(item.id==="spin_ticket")db.prepare("UPDATE users SET spin_tickets=spin_tickets+1 WHERE telegram_id=?").run(user.telegram_id);
-      if(item.id==="tap_upgrade")db.prepare("UPDATE users SET tap_power=tap_power+1 WHERE telegram_id=?").run(user.telegram_id);
+      if(item.id==="tap_upgrade")db.prepare("UPDATE users SET tap_power=MIN(100,tap_power+1) WHERE telegram_id=?").run(user.telegram_id);
+      if(item.id==="tap_upgrade_5")db.prepare("UPDATE users SET tap_power=MIN(100,tap_power+5) WHERE telegram_id=?").run(user.telegram_id);
+      if(item.id==="energy_refill")db.prepare("UPDATE users SET energy=?,energy_updated_at=? WHERE telegram_id=?").run(MAX_ENERGY,now(),user.telegram_id);
       addLedger(user.telegram_id,-item.cost,`Shop purchase: ${item.title}`);
       db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at) VALUES(?,?,?,?)").run(user.telegram_id,item.id,item.cost,now());
     })();res.json({ok:true,message:`${item.title} purchased.`});
@@ -438,7 +465,10 @@ app.post("/api/tasks/:id/claim",auth,claimLimiter,(req,res)=>{
   const task=db.prepare("SELECT id FROM managed_tasks WHERE id=? AND active=1").get(id);
   if(!task)return res.status(404).json({error:"Task not found."});
   try {
-    db.prepare("INSERT INTO managed_task_claims(telegram_id,task_id,status,claimed_at) VALUES(?,?,'pending',?)").run(user.telegram_id,id,now());
+    const previous=db.prepare("SELECT id,status FROM managed_task_claims WHERE telegram_id=? AND task_id=?").get(user.telegram_id,id);
+    if(previous && previous.status!=="rejected") return res.status(409).json({error:"Task already submitted.",status:previous.status});
+    if(previous) db.prepare("UPDATE managed_task_claims SET status='pending',claimed_at=?,reviewed_at=NULL,reviewed_by=NULL WHERE id=?").run(now(),previous.id);
+    else db.prepare("INSERT INTO managed_task_claims(telegram_id,task_id,status,claimed_at) VALUES(?,?,'pending',?)").run(user.telegram_id,id,now());
     res.status(201).json({ok:true,status:"pending",message:"Task submitted for admin review."});
   }catch(e){
     if(String(e.code||"").startsWith("SQLITE_CONSTRAINT")){

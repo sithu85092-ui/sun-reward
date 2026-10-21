@@ -1,222 +1,281 @@
 (() => {
-  "use strict";
+  'use strict';
   const tg = window.Telegram?.WebApp;
-  if (tg) { tg.ready(); tg.expand(); }
+  if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#07130e'); tg.setBackgroundColor('#07130e'); } catch {} }
   const $ = (id) => document.getElementById(id);
   let account = null;
-  let adminKey = "";
+  let adminKey = '';
+  let tonUI = null;
+  let tonManifestUrl = '';
+  let walletStatusUnsubscribe = null;
+  let walletSyncInProgress = false;
   const api = async (url, options = {}) => {
-    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-    if (tg?.initData) headers["X-Telegram-Init-Data"] = tg.initData;
-    if (adminKey) headers["X-Admin-Key"] = adminKey;
+    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    if (tg?.initData) headers['X-Telegram-Init-Data'] = tg.initData;
+    if (adminKey) headers['X-Admin-Key'] = adminKey;
     const response = await fetch(url, { ...options, headers });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
     return data;
   };
   const show = (message, error = false) => {
-    const box = $("notice"); box.textContent = message; box.classList.remove("hidden", "error");
-    if (error) box.classList.add("error");
-    window.setTimeout(() => box.classList.add("hidden"), 4500);
+    const box = $('notice'); if (!box) return;
+    box.textContent = message; box.classList.remove('hidden', 'error');
+    if (error) box.classList.add('error');
+    window.clearTimeout(show.timer); show.timer = window.setTimeout(() => box.classList.add('hidden'), 4200);
   };
   const el = (tag, cls, text) => {
-    const n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (text !== undefined) n.textContent = text;
-    return n;
+    const n = document.createElement(tag); if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text; return n;
   };
-  const button = (text, action, cls = "secondary") => {
-    const b = el("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b;
+  const button = (text, action, cls = 'button button-secondary') => {
+    const b = el('button', cls, text); b.type = 'button'; b.addEventListener('click', action); return b;
   };
-  const item = (title, description = "") => {
-    const wrap = el("div", "item"); wrap.append(el("h4", "", title));
-    if (description) wrap.append(el("p", "", description));
-    return wrap;
+  const itemCard = (title, description = '') => {
+    const wrap = el('article', 'item-card'); wrap.append(el('h3', '', title));
+    if (description) wrap.append(el('p', '', description)); return wrap;
   };
-  async function loadMe() {
-    if (!tg?.initData) {
-      $("connection").textContent = "Open in Telegram";
-      show("Open this Mini App from your Telegram bot to sign in.", true);
-      return;
-    }
-    try {
-      const data = await api("/api/me"); account = data;
-      $("connection").textContent = "Connected";
-      $("points").textContent = data.user.points;
-      $("greeting").textContent = `Hello, ${data.user.first_name || "SUN"}!`;
-      $("energy").textContent = data.user.energy;
-      $("energyMax").textContent = data.user.energyMax;
-      $("tapPower").textContent = data.user.tapPower;
-      $("referrals").textContent = data.referralCount;
-      $("seeds").textContent = data.user.seeds;
-      $("spinTickets").textContent = data.user.spinTickets;
-      $("inventoryTapPower").textContent = data.user.tapPower;
-      $("plantGrowth").textContent = data.user.plant.growth;
-      $("plantProgress").style.width = `${data.user.plant.growth}%`;
-      $("gardenStatus").textContent = data.plantUnlocked ? "Garden unlocked." : "Locked: verify channel membership and invite 3 eligible referrals.";
-      $("vipStatus").textContent = data.user.vip ? `VIP active until ${data.user.vipExpiry || "unknown"}.` : "VIP required to request a withdrawal.";
-      $("profileName").textContent = data.user.first_name || "Telegram user";
-      $("profileUsername").textContent = data.user.username ? `@${data.user.username}` : "No public username";
-      $("profileVip").textContent = data.user.vip ? "Active" : "No";
-      $("channelStatus").textContent = data.channel.member ? "Verified member" : "Not verified";
-      $("referralLink").value = data.referralLink || "";
-      $("withdrawPoints").min = data.config.minWithdrawalPoints;
-      $("withdrawPoints").value = data.config.minWithdrawalPoints;
-      renderLedger(data.ledger || []);
-      await Promise.allSettled([loadTasks(), loadSocialLinks(), loadShop()]);
-    } catch (e) { $("connection").textContent = "Error"; show(e.message, true); }
+  const safeExternal = (url) => {
+    try { const parsed = new URL(url); return parsed.protocol === 'https:' ? parsed.href : null; } catch { return null; }
+  };
+  function setView(name) {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('hidden', v.id !== `view-${name}`));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   function renderLedger(rows) {
-    const root = $("ledger"); root.replaceChildren();
-    if (!rows.length) { root.append(el("p", "muted", "No activity yet.")); return; }
+    const root = $('ledger'); root.replaceChildren();
+    if (!rows.length) { root.append(el('p', 'empty-state', 'No activity yet. Your first SUN reward will appear here.')); return; }
     rows.forEach(r => {
-      const row = el("div", "item");
-      const head = el("div", "item-head");
-      head.append(el("strong", "", r.description), el("strong", "", `${r.delta > 0 ? "+" : ""}${r.delta} SUN`));
-      row.append(head, el("p", "", new Date(r.created_at).toLocaleString()));
-      root.append(row);
+      const row = el('div', 'activity-row'); const head = el('div', 'activity-row-head');
+      head.append(el('strong', '', r.description), el('strong', `delta${r.delta < 0 ? ' negative' : ''}`, `${r.delta > 0 ? '+' : ''}${r.delta} SUN`));
+      row.append(head, el('small', '', new Date(r.created_at).toLocaleString())); root.append(row);
     });
   }
   async function loadTasks() {
-    const root = $("tasks"); root.replaceChildren();
-    const data = await api("/api/tasks");
-    if (!data.tasks.length) { root.append(el("p", "muted", "No active tasks yet.")); return; }
+    const root = $('tasks'); root.replaceChildren();
+    const data = await api('/api/tasks');
+    if (!data.tasks.length) { root.append(el('p', 'empty-state', 'No active tasks yet. Check back soon.')); return; }
     data.tasks.forEach(t => {
-      const card = item(t.title, `${t.description || ""} · Reward: ${t.points} SUN`);
-      const status = t.claim_status ? `Status: ${t.claim_status}` : "Not submitted";
-      card.append(el("p", "", status));
-      const actions = el("div", "actions");
-      if (t.url) actions.append(button("Open task", () => window.open(t.url, "_blank", "noopener,noreferrer")));
-      if (!t.claim_status) actions.append(button("Submit for review", async () => {
-        try { await api(`/api/tasks/${encodeURIComponent(t.id)}/claim`, { method: "POST", body: "{}" }); show("Task submitted for review."); await loadTasks(); }
+      const card = itemCard(t.title, t.description || 'Complete this mission to earn SUN.');
+      const meta = el('div', 'item-meta', `✦ ${t.points} SUN reward`); card.append(meta);
+      const statusText = ({ pending: 'Pending admin review', approved: 'Reward approved', rejected: 'Submission rejected' })[t.claim_status] || 'Not submitted';
+      card.append(el('div', 'item-status', statusText));
+      const actions = el('div', 'actions'); const safeUrl = t.url ? safeExternal(t.url) : null;
+      if (safeUrl) actions.append(button('Open task ↗', () => window.open(safeUrl, '_blank', 'noopener,noreferrer')));
+      if (!t.claim_status || t.claim_status === 'rejected') actions.append(button('Submit for review', async () => {
+        try { await api(`/api/tasks/${encodeURIComponent(t.id)}/claim`, { method: 'POST', body: '{}' }); show('Task submitted for review.'); await loadTasks(); }
         catch (e) { show(e.message, true); }
-      }, "primary"));
-      card.append(actions); root.append(card);
+      }, 'button button-primary'));
+      if (actions.childElementCount) card.append(actions); root.append(card);
     });
   }
   async function loadSocialLinks() {
-    const root = $("socialLinks"); root.replaceChildren();
-    const data = await api("/api/social-links");
-    if (!data.links.length) { root.append(el("p", "muted", "No social links configured.")); return; }
+    const root = $('socialLinks'); root.replaceChildren();
+    const data = await api('/api/social-links');
+    if (!data.links.length) { root.append(el('p', 'empty-state', 'No social channels have been configured by admin yet.')); return; }
     data.links.forEach(link => {
-      const card = item(link.title); card.append(button("Open link", () => window.open(link.url, "_blank", "noopener,noreferrer")));
+      const card = itemCard(link.title, 'Visit our official community channel.');
+      const url = safeExternal(link.url); if (url) card.append(button('Open channel ↗', () => window.open(url, '_blank', 'noopener,noreferrer')));
       root.append(card);
     });
   }
+  const shopIcons = { seed: '🌱', spin_ticket: '🎟️', tap_upgrade: '⚡', tap_upgrade_5: '🚀', energy_refill: '🔋' };
+  async function buyItem(id) {
+    try { const result = await api('/api/shop/buy', { method: 'POST', body: JSON.stringify({ itemId: id }) }); show(result.message || 'Purchase complete.'); await loadMe(); }
+    catch (e) { show(e.message, true); }
+  }
   async function loadShop() {
-    const root = $("shopItems"); root.replaceChildren();
-    const data = await api("/api/shop");
-    data.items.forEach(i => {
-      const card = item(i.title, `Cost: ${i.cost} SUN`);
-      card.append(button("Buy", async () => {
-        try { const result = await api("/api/shop/buy", { method: "POST", body: JSON.stringify({ itemId: i.id }) }); show(result.message); await loadMe(); }
-        catch (e) { show(e.message, true); }
-      }, "primary")); root.append(card);
+    const root = $('shopItems'), upgrades = $('upgradeCards'); root.replaceChildren(); upgrades.replaceChildren();
+    const data = await api('/api/shop');
+    const items = data.items || [];
+    const regular = items.filter(i => i.category !== 'upgrade');
+    const upgradeItems = items.filter(i => i.category === 'upgrade');
+    if (!regular.length) root.append(el('p', 'empty-state', 'The shop is empty. Ask admin to configure items.'));
+    regular.forEach(i => {
+      const card = el('article', 'shop-item');
+      card.append(el('div', 'shop-item-art', shopIcons[i.id] || '✦'), el('h3', '', i.title), el('p', '', i.description || 'Useful item for your SUN REWARD journey.'));
+      const price = el('div', 'shop-price'); price.append(el('strong', '', `${i.cost} SUN`), el('small', '', 'ONE-TIME')); card.append(price);
+      card.append(button('Buy item', () => buyItem(i.id), 'button button-primary')); root.append(card);
+    });
+    if (!upgradeItems.length) upgrades.append(el('p', 'empty-state', 'No upgrades available.'));
+    upgradeItems.forEach(i => {
+      const card = el('article', 'upgrade-card');
+      card.append(el('div', 'upgrade-art', shopIcons[i.id] || '✦'), el('h3', '', i.title), el('p', '', i.description || 'Upgrade your player stats.'), el('span', 'level-pill', 'PERMANENT UPGRADE'));
+      const price = el('div', 'shop-price'); price.append(el('strong', '', `${i.cost} SUN`), el('small', '', 'UPGRADE')); card.append(price);
+      card.append(button('Unlock upgrade', () => buyItem(i.id), 'button button-primary')); upgrades.append(card);
     });
   }
+  async function loadWallet() {
+    try {
+      const data = await api('/api/wallet');
+      renderWallet(data.wallet || {});
+    } catch (e) { console.warn('Wallet status unavailable:', e.message); }
+  }
+  function shortAddress(address) {
+    if (!address) return '';
+    return address.length > 22 ? `${address.slice(0, 8)}…${address.slice(-8)}` : address;
+  }
+  function renderWallet(wallet = {}) {
+    const address = wallet.address || '';
+    $('walletTitle').textContent = address ? 'TON wallet connected' : 'Connect TON wallet';
+    $('walletDescription').textContent = address ? `Connected address: ${shortAddress(address)}` : 'Link your TON wallet address to your SUN REWARD profile.';
+    $('walletStatus').textContent = address ? 'Connected' : 'Not connected';
+    $('walletStatus').classList.toggle('connected', Boolean(address));
+    $('disconnectWalletButton').classList.toggle('hidden', !address);
+  }
+  async function initTonConnect() {
+    try {
+      const cfg = await fetch('/api/public-config').then(r => r.json());
+      tonManifestUrl = cfg.tonConnectManifestUrl || '';
+      if (!tonManifestUrl || !window.TON_CONNECT_UI?.TonConnectUI) {
+        $('tonConnectButton').replaceChildren();
+        $('tonConnectButton').append(el('p', 'helper-text', !tonManifestUrl ? 'Wallet connection setup needed: set TON_CONNECT_MANIFEST_URL to your public tonconnect-manifest.json URL in server environment.' : 'TON Connect library did not load. Reload the app and try again.'));
+        return;
+      }
+      tonUI = new window.TON_CONNECT_UI.TonConnectUI({ manifestUrl: tonManifestUrl, buttonRootId: 'tonConnectButton' });
+      walletStatusUnsubscribe = tonUI.onStatusChange(async wallet => {
+        if (!wallet?.account?.address || walletSyncInProgress) return;
+        walletSyncInProgress = true;
+        try {
+          await api('/api/wallet/connect', { method: 'POST', body: JSON.stringify({ address: wallet.account.address, chain: String(wallet.account.chain || '') }) });
+          renderWallet({ address: wallet.account.address, chain: wallet.account.chain });
+          show('TON wallet connected to your profile.');
+        } catch (e) { show(e.message, true); }
+        finally { walletSyncInProgress = false; }
+      });
+      const current = tonUI.wallet;
+      if (current?.account?.address) {
+        try { await api('/api/wallet/connect', { method: 'POST', body: JSON.stringify({ address: current.account.address, chain: String(current.account.chain || '') }) }); renderWallet({ address: current.account.address }); } catch {}
+      }
+    } catch (e) { console.warn('TON Connect setup failed:', e.message); }
+  }
+  async function loadMe() {
+    if (!tg?.initData) {
+      $('connection').textContent = 'Open in Telegram'; $('connection').classList.add('error');
+      show('Open this Mini App from your Telegram bot to sign in securely.', true); return;
+    }
+    try {
+      const data = await api('/api/me'); account = data;
+      $('connection').innerHTML = '<i></i> Connected'; $('connection').classList.remove('error'); $('connection').classList.add('connected');
+      const user = data.user;
+      $('points').textContent = Number(user.points || 0).toLocaleString();
+      $('shopBalance').textContent = Number(user.points || 0).toLocaleString();
+      $('greeting').textContent = user.first_name || 'SUN Player';
+      $('energy').textContent = user.energy; $('energyMax').textContent = user.energyMax;
+      $('tapEnergy').textContent = `${user.energy}/${user.energyMax}`;
+      $('energyBar').style.width = `${Math.max(0, Math.min(100, 100 * user.energy / Math.max(1, user.energyMax)))}%`;
+      $('tapPower').innerHTML = `${user.tapPower} <em>SUN/tap</em>`;
+      $('tapHint').textContent = `+${user.tapPower} SUN per tap`;
+      $('referrals').textContent = data.referralCount || 0; $('walletReferrals').textContent = `${data.referralCount || 0} friends`;
+      $('seeds').innerHTML = `${user.seeds} <em>in bag</em>`; $('inventorySeeds').textContent = user.seeds;
+      $('spinTickets').textContent = user.spinTickets; $('inventoryTapPower').textContent = user.tapPower;
+      $('plantGrowth').textContent = user.plant.growth; $('plantProgress').style.width = `${user.plant.growth}%`;
+      $('gardenStatus').textContent = data.plantUnlocked ? (user.plant.stage ? (user.plant.growth >= 100 ? 'Your plant is ready!' : 'Your plant is growing') : 'Your garden is unlocked') : 'Garden is locked';
+      $('gardenSubStatus').textContent = data.plantUnlocked ? (user.plant.stage ? 'Keep watering until it reaches 100%.' : `${user.seeds} seed(s) available to plant.`) : `Join ${data.config.requiredChannel || 'the required channel'} and invite ${data.config.minPlantReferrals} eligible friends.`;
+      $('gardenPlantArt').classList.toggle('growing', user.plant.stage > 0 && user.plant.growth > 0);
+      $('gardenPlantArt').classList.toggle('ready', user.plant.stage > 0 && user.plant.growth >= 100);
+      $('gardenPlantArt').style.opacity = user.plant.stage > 0 ? '1' : '.55';
+      $('gardenPlantArt').style.transform = user.plant.stage > 0 ? 'translateX(-50%) scale(1)' : 'translateX(-50%) scale(.72)';
+      $('vipStatus').textContent = user.vip ? `VIP active until ${user.vipExpiry || 'expiry unavailable'}.` : 'VIP membership required to request a withdrawal.';
+      $('profileName').textContent = user.first_name || 'Telegram user'; $('profileUsername').textContent = user.username ? `@${user.username}` : 'No public username';
+      $('profileNameAlt').textContent = user.first_name || 'Telegram user'; $('profileUsernameAlt').textContent = user.username ? `@${user.username}` : 'No public username';
+      const initial = (user.first_name || 'S').trim().charAt(0).toUpperCase();
+      $('profileAvatar').textContent = initial; $('profileAvatarLarge').textContent = initial; $('profileAvatarLargeAlt').textContent = initial;
+      $('profileVip').textContent = user.vip ? 'VIP ACTIVE' : 'NO VIP'; $('profileVip').classList.toggle('active', Boolean(user.vip));
+      $('profileVipAlt').textContent = user.vip ? 'VIP ACTIVE' : 'NO VIP'; $('profileVipAlt').classList.toggle('active', Boolean(user.vip));
+      $('channelStatus').textContent = data.channel.member ? 'Verified member' : 'Not verified'; $('channelStatusAlt').textContent = data.channel.member ? 'Verified member' : 'Not verified';
+      $('accountCreated').textContent = user.created_at ? new Date(user.created_at).toLocaleDateString() : '—';
+      $('referralLink').value = data.referralLink || '';
+      $('withdrawPoints').min = data.config.minWithdrawalPoints;
+      if (!$('withdrawPoints').dataset.touched) $('withdrawPoints').value = data.config.minWithdrawalPoints;
+      renderLedger(data.ledger || []);
+      await Promise.allSettled([loadTasks(), loadSocialLinks(), loadShop(), loadWallet()]);
+    } catch (e) { $('connection').textContent = 'Connection error'; $('connection').classList.add('error'); show(e.message, true); }
+  }
   async function action(url, body = {}) {
-    try { const d = await api(url, { method: "POST", body: JSON.stringify(body) }); show(d.message || "Success."); await loadMe(); }
+    try { const d = await api(url, { method: 'POST', body: JSON.stringify(body) }); show(d.message || 'Success.'); await loadMe(); }
     catch (e) { show(e.message, true); }
   }
-  document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b));
-    document.querySelectorAll(".view").forEach(v => v.classList.toggle("hidden", v.id !== `view-${b.dataset.view}`));
-  }));
-  $("tapButton").addEventListener("click", async () => {
-    try { const d = await api("/api/tap", { method: "POST", body: "{}" }); show(d.message); await loadMe(); }
+  document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+  document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => setView(b.dataset.goto)));
+  $('profileAvatar').addEventListener('click', () => setView('profile'));
+  $('tapButton').addEventListener('click', async () => {
+    try { const d = await api('/api/tap', { method: 'POST', body: '{}' }); show(d.message || `+${d.earned} SUN`); await loadMe(); }
     catch (e) { show(e.message, true); }
   });
-  $("checkinButton").addEventListener("click", () => action("/api/checkin"));
-  $("spinButton").addEventListener("click", () => action("/api/spin"));
-  $("buySeedButton").addEventListener("click", () => action("/api/plant/buy-seed"));
-  $("plantButton").addEventListener("click", () => action("/api/plant/plant"));
-  $("waterButton").addEventListener("click", () => action("/api/plant/water"));
-  $("harvestButton").addEventListener("click", () => action("/api/plant/harvest"));
-  $("verifyPlantButton").addEventListener("click", () => action("/api/plant/verify"));
-  $("withdrawButton").addEventListener("click", () => action("/api/withdrawals", {
-    points: Number($("withdrawPoints").value), method: $("withdrawMethod").value
-  }));
-  $("copyReferralButton").addEventListener("click", async () => {
-    if (!$("referralLink").value) return show("Referral link unavailable.", true);
-    try { await navigator.clipboard.writeText($("referralLink").value); show("Referral link copied."); }
-    catch { $("referralLink").select(); show("Select and copy the link manually."); }
+  $('checkinButton').addEventListener('click', () => action('/api/checkin'));
+  $('spinButton').addEventListener('click', () => action('/api/spin'));
+  $('buySeedButton').addEventListener('click', () => buyItem('seed'));
+  $('plantButton').addEventListener('click', () => action('/api/plant/plant'));
+  $('waterButton').addEventListener('click', () => action('/api/plant/water'));
+  $('harvestButton').addEventListener('click', () => action('/api/plant/harvest'));
+  $('verifyPlantButton').addEventListener('click', () => action('/api/plant/verify'));
+  $('withdrawPoints').addEventListener('input', () => { $('withdrawPoints').dataset.touched = '1'; });
+  $('withdrawButton').addEventListener('click', () => action('/api/withdrawals', { points: Number($('withdrawPoints').value), method: $('withdrawMethod').value }));
+  $('copyReferralButton').addEventListener('click', async () => {
+    if (!$('referralLink').value) return show('Referral link unavailable. Set BOT_USERNAME in server settings.', true);
+    try { await navigator.clipboard.writeText($('referralLink').value); show('Referral link copied.'); }
+    catch { $('referralLink').select(); show('Select and copy the link manually.'); }
   });
-
-  $("showAdminButton").addEventListener("click", () => {
-    document.querySelectorAll(".view").forEach(v => v.classList.add("hidden"));
-    $("view-admin").classList.remove("hidden");
-    document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
-  });
-  $("saveAdminKey").addEventListener("click", async () => {
-    adminKey = $("adminKey").value.trim();
-    try { await loadAdmin(); show("Admin key accepted for this page session."); }
-    catch (e) { adminKey = ""; show(e.message, true); }
-  });
-  $("createTaskButton").addEventListener("click", async () => {
+  $('disconnectWalletButton').addEventListener('click', async () => {
     try {
-      await api("/api/admin/tasks", { method: "POST", body: JSON.stringify({
-        id: $("newTaskId").value.trim(), title: $("newTaskTitle").value.trim(),
-        description: $("newTaskDescription").value.trim(), url: $("newTaskUrl").value.trim(),
-        points: Number($("newTaskPoints").value)
-      })});
-      show("Task created."); await loadAdmin(); await loadTasks();
+      if (tonUI) await tonUI.disconnect();
+      await api('/api/wallet/disconnect', { method: 'POST', body: '{}' }); renderWallet({}); show('Wallet disconnected from your SUN REWARD profile.');
     } catch (e) { show(e.message, true); }
   });
-  $("createLinkButton").addEventListener("click", async () => {
+  $('showAdminButton').addEventListener('click', () => setView('admin'));
+  $('saveAdminKey').addEventListener('click', async () => {
+    adminKey = $('adminKey').value.trim();
+    try { await loadAdmin(); show('Admin tools unlocked for this page session.'); }
+    catch (e) { adminKey = ''; show(e.message, true); }
+  });
+  $('createTaskButton').addEventListener('click', async () => {
     try {
-      await api("/api/admin/social-links", { method: "POST", body: JSON.stringify({
-        id: $("newLinkId").value.trim(), title: $("newLinkTitle").value.trim(), url: $("newLinkUrl").value.trim()
-      })});
-      show("Social link added."); await loadAdmin(); await loadSocialLinks();
+      await api('/api/admin/tasks', { method: 'POST', body: JSON.stringify({ id: $('newTaskId').value.trim(), title: $('newTaskTitle').value.trim(), description: $('newTaskDescription').value.trim(), url: $('newTaskUrl').value.trim(), points: Number($('newTaskPoints').value) }) });
+      show('Task created.'); await loadAdmin(); await loadTasks();
+    } catch (e) { show(e.message, true); }
+  });
+  $('createLinkButton').addEventListener('click', async () => {
+    try {
+      await api('/api/admin/social-links', { method: 'POST', body: JSON.stringify({ id: $('newLinkId').value.trim(), title: $('newLinkTitle').value.trim(), url: $('newLinkUrl').value.trim() }) });
+      show('Social link added.'); await loadAdmin(); await loadSocialLinks();
     } catch (e) { show(e.message, true); }
   });
   async function loadAdmin() {
-    const [tasks, links, claims, withdrawals] = await Promise.all([
-      api("/api/admin/tasks"), api("/api/admin/social-links"),
-      api("/api/admin/task-claims"), api("/api/admin/withdrawals")
-    ]);
-    const taskRoot = $("adminTasks"); taskRoot.replaceChildren();
+    const [tasks, links, claims, withdrawals] = await Promise.all([api('/api/admin/tasks'), api('/api/admin/social-links'), api('/api/admin/task-claims'), api('/api/admin/withdrawals')]);
+    const taskRoot = $('adminTasks'); taskRoot.replaceChildren();
     tasks.tasks.forEach(t => {
-      const card = item(`${t.title} (${t.id})`, `${t.points} SUN · ${t.active ? "Active" : "Disabled"}`);
-      card.append(button(t.active ? "Disable" : "Enable", async () => {
-        try { await api(`/api/admin/tasks/${encodeURIComponent(t.id)}`, { method: "PATCH", body: JSON.stringify({ active: !t.active }) }); await loadAdmin(); await loadTasks(); }
-        catch(e) { show(e.message, true); }
-      }));
-      card.append(button("Delete permanently not available", () => show("Tasks are soft-disabled to preserve claim history.")));
-      taskRoot.append(card);
+      const card = itemCard(`${t.title} (${t.id})`, `${t.points} SUN · ${t.active ? 'Active' : 'Disabled'}`);
+      const actions = el('div', 'actions');
+      actions.append(button(t.active ? 'Disable' : 'Enable', async () => { try { await api(`/api/admin/tasks/${encodeURIComponent(t.id)}`, { method: 'PATCH', body: JSON.stringify({ active: !t.active }) }); await loadAdmin(); await loadTasks(); } catch (e) { show(e.message, true); } }));
+      actions.append(button('Edit task', async () => {
+        const title = prompt('Task title', t.title); if (title === null) return;
+        const description = prompt('Task description', t.description || ''); if (description === null) return;
+        const url = prompt('HTTPS task URL (leave blank for none)', t.url || ''); if (url === null) return;
+        const points = Number(prompt('Reward points', String(t.points))); if (!Number.isSafeInteger(points)) return show('Invalid reward amount.', true);
+        try { await api(`/api/admin/tasks/${encodeURIComponent(t.id)}`, { method: 'PATCH', body: JSON.stringify({ title, description, url, points }) }); show('Task updated.'); await loadAdmin(); await loadTasks(); } catch (e) { show(e.message, true); }
+      })); card.append(actions); taskRoot.append(card);
     });
-    const linkRoot = $("adminLinks"); linkRoot.replaceChildren();
+    const linkRoot = $('adminLinks'); linkRoot.replaceChildren();
     links.links.forEach(l => {
-      const card = item(l.title, `${l.url} · ${l.active ? "Active" : "Disabled"}`);
-      card.append(button(l.active ? "Disable" : "Enable", async () => {
-        try { await api(`/api/admin/social-links/${encodeURIComponent(l.id)}`, { method: "PATCH", body: JSON.stringify({ active: !l.active }) }); await loadAdmin(); await loadSocialLinks(); }
-        catch(e) { show(e.message, true); }
-      }));
-      card.append(button("Delete", async () => {
-        if (!confirm(`Delete ${l.title}?`)) return;
-        try { await api(`/api/admin/social-links/${encodeURIComponent(l.id)}`, { method: "DELETE" }); await loadAdmin(); await loadSocialLinks(); }
-        catch(e) { show(e.message, true); }
-      }));
-      linkRoot.append(card);
+      const card = itemCard(`${l.title} (${l.id})`, `${l.url} · ${l.active ? 'Active' : 'Disabled'}`); const actions = el('div', 'actions');
+      actions.append(button(l.active ? 'Disable' : 'Enable', async () => { try { await api(`/api/admin/social-links/${encodeURIComponent(l.id)}`, { method: 'PATCH', body: JSON.stringify({ active: !l.active }) }); await loadAdmin(); await loadSocialLinks(); } catch (e) { show(e.message, true); } }));
+      actions.append(button('Edit link', async () => { const title = prompt('Link title', l.title); if (title === null) return; const url = prompt('HTTPS URL', l.url); if (url === null) return; try { await api(`/api/admin/social-links/${encodeURIComponent(l.id)}`, { method: 'PATCH', body: JSON.stringify({ title, url }) }); show('Social link updated.'); await loadAdmin(); await loadSocialLinks(); } catch (e) { show(e.message, true); } }));
+      actions.append(button('Delete', async () => { if (!confirm(`Delete ${l.title}?`)) return; try { await api(`/api/admin/social-links/${encodeURIComponent(l.id)}`, { method: 'DELETE' }); await loadAdmin(); await loadSocialLinks(); } catch (e) { show(e.message, true); } })); card.append(actions); linkRoot.append(card);
     });
-    const claimRoot = $("adminClaims"); claimRoot.replaceChildren();
+    const claimRoot = $('adminClaims'); claimRoot.replaceChildren();
+    if (!claims.claims.length) claimRoot.append(el('p', 'empty-state', 'No task claims yet.'));
     claims.claims.forEach(c => {
-      const card = item(`${c.title || c.task_id} · User ${c.telegram_id}`, `${c.status} · Reward ${c.points ?? "unknown"} SUN`);
-      if (c.status === "pending") {
-        card.append(button("Approve", async () => { try { await api(`/api/admin/task-claims/${c.id}`, { method: "POST", body: JSON.stringify({status:"approved"}) }); show("Claim approved."); await loadAdmin(); } catch(e) { show(e.message,true); } }, "primary"));
-        card.append(button("Reject", async () => { try { await api(`/api/admin/task-claims/${c.id}`, { method: "POST", body: JSON.stringify({status:"rejected"}) }); show("Claim rejected."); await loadAdmin(); } catch(e) { show(e.message,true); } }));
-      }
-      claimRoot.append(card);
+      const card = itemCard(`${c.title || c.task_id} · User ${c.telegram_id}`, `${c.status} · Reward ${c.points ?? 'unknown'} SUN`);
+      if (c.status === 'pending') { const actions = el('div', 'actions'); actions.append(button('Approve', async () => { try { await api(`/api/admin/task-claims/${c.id}`, { method: 'POST', body: JSON.stringify({ status: 'approved' }) }); show('Claim approved.'); await loadAdmin(); } catch (e) { show(e.message, true); } }, 'button button-primary')); actions.append(button('Reject', async () => { try { await api(`/api/admin/task-claims/${c.id}`, { method: 'POST', body: JSON.stringify({ status: 'rejected' }) }); show('Claim rejected.'); await loadAdmin(); } catch (e) { show(e.message, true); } })); card.append(actions); } claimRoot.append(card);
     });
-    const wRoot = $("adminWithdrawals"); wRoot.replaceChildren();
+    const wRoot = $('adminWithdrawals'); wRoot.replaceChildren();
+    if (!withdrawals.length) wRoot.append(el('p', 'empty-state', 'No withdrawal requests yet.'));
     withdrawals.forEach(w => {
-      const card = item(`Request #${w.id} · User ${w.telegram_id}`, `${w.points} points · ${w.method} · ${w.status}`);
-      if (w.status === "pending") {
-        card.append(button("Approve (manual only)", async () => { try { await api(`/api/admin/withdrawals/${w.id}`, {method:"POST",body:JSON.stringify({status:"approved"})}); show("Marked approved; no payment sent."); await loadAdmin(); } catch(e) { show(e.message,true); } }));
-        card.append(button("Reject + refund", async () => { try { await api(`/api/admin/withdrawals/${w.id}`, {method:"POST",body:JSON.stringify({status:"rejected"})}); show("Rejected and points refunded."); await loadAdmin(); await loadMe(); } catch(e) { show(e.message,true); } }));
-      }
-      wRoot.append(card);
+      const card = itemCard(`Request #${w.id} · User ${w.telegram_id}`, `${w.points} points · ${w.method} · ${w.status}`);
+      if (w.status === 'pending') { const actions = el('div', 'actions'); actions.append(button('Mark approved', async () => { try { await api(`/api/admin/withdrawals/${w.id}`, { method: 'POST', body: JSON.stringify({ status: 'approved' }) }); show('Marked approved; no payment was sent.'); await loadAdmin(); } catch (e) { show(e.message, true); } })); actions.append(button('Reject + refund', async () => { try { await api(`/api/admin/withdrawals/${w.id}`, { method: 'POST', body: JSON.stringify({ status: 'rejected' }) }); show('Rejected and points refunded.'); await loadAdmin(); await loadMe(); } catch (e) { show(e.message, true); } })); card.append(actions); } wRoot.append(card);
     });
   }
-  loadMe();
+  loadMe(); initTonConnect();
 })();

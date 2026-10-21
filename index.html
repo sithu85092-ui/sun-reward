@@ -3,86 +3,103 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#10251b">
-  <title>SUN REWARD</title>
+  <meta name="theme-color" content="#07150f">
+  <title>SUN REWARD — Play · Grow · Earn</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/@tonconnect/ui@2.3.0/dist/tonconnect-ui.min.js"></script>
   <script defer src="/app.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="sun">☀</span><div><strong>SUN REWARD</strong><small>Play · Grow · Earn</small></div></div>
-    <span id="connection" class="pill">Connecting…</span>
-  </header>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#home" aria-label="SUN REWARD home"><span class="brand-mark">☀</span><span class="brand-copy"><strong>SUN REWARD</strong><small>PLAY · GROW · EARN</small></span></a>
+      <div class="top-actions"><span id="connection" class="connection"><i></i> Connecting</span><button id="profileAvatar" class="avatar" aria-label="Open profile">S</button></div>
+    </header>
 
-  <main>
-    <section class="hero panel">
-      <p class="muted">YOUR COIN BALANCE</p>
-      <div class="balance"><span id="points">0</span><small>SUN</small></div>
-      <p id="greeting">Hello!</p>
-      <div class="stats">
-        <div><small>Energy</small><strong><span id="energy">100</span>/<span id="energyMax">100</span></strong></div>
-        <div><small>Tap power</small><strong id="tapPower">1</strong></div>
-        <div><small>Referrals</small><strong id="referrals">0</strong></div>
-      </div>
-    </section>
+    <main>
+      <section class="hero-card">
+        <div class="hero-glow"></div><div class="hero-top"><span class="eyebrow">TOTAL BALANCE</span><span class="sun-chip">✦ SUN POINTS</span></div>
+        <div class="balance-line"><strong id="points">0</strong><span>SUN</span></div>
+        <div class="hero-bottom"><div class="welcome"><span class="muted">Welcome back,</span><strong id="greeting">SUN Player</strong></div><div class="streak"><span class="streak-icon">⚡</span><span><strong id="energy">100</strong><small> / <span id="energyMax">100</span> ENERGY</small></span></div></div>
+        <div class="hero-orb orb-one"></div><div class="hero-orb orb-two"></div>
+      </section>
 
-    <nav class="tabs" aria-label="Sections">
-      <button class="tab active" data-view="home">Home</button>
-      <button class="tab" data-view="tasks">Tasks</button>
-      <button class="tab" data-view="shop">Shop</button>
-      <button class="tab" data-view="garden">Garden</button>
-      <button class="tab" data-view="wallet">Wallet</button>
-      <button class="tab" data-view="profile">Profile</button>
-    </nav>
+      <section class="quick-stats">
+        <div class="stat-card"><span class="stat-icon green">↗</span><div><small>TAP POWER</small><strong id="tapPower">1 <em>SUN/tap</em></strong></div></div>
+        <div class="stat-card"><span class="stat-icon gold">♧</span><div><small>SEEDS</small><strong id="seeds">0 <em>in bag</em></strong></div></div>
+        <div class="stat-card"><span class="stat-icon purple">♙</span><div><small>REFERRALS</small><strong id="referrals">0 <em>friends</em></strong></div></div>
+      </section>
 
-    <section id="notice" class="notice hidden" role="status"></section>
+      <nav class="main-nav" aria-label="Main navigation">
+        <button class="nav-item active" data-view="home"><span>⌂</span><small>Home</small></button>
+        <button class="nav-item" data-view="tasks"><span>☷</span><small>Tasks</small></button>
+        <button class="nav-item" data-view="garden"><span>♧</span><small>Garden</small></button>
+        <button class="nav-item" data-view="shop"><span>▦</span><small>Shop</small></button>
+        <button class="nav-item" data-view="wallet"><span>◈</span><small>Wallet</small></button>
+      </nav>
 
-    <section id="view-home" class="view">
-      <div class="panel center">
-        <h2>Tap to Earn</h2>
-        <p class="muted">Each tap uses 1 energy.</p>
-        <button id="tapButton" class="tap-button" aria-label="Tap to earn">☀</button>
-        <p id="tapHint" class="muted">Tap the sun to earn SUN points.</p>
-        <button id="checkinButton" class="primary">Daily check-in</button>
-      </div>
-      <div class="panel">
-        <h3>Recent activity</h3>
-        <div id="ledger" class="list"><p class="muted">Loading activity…</p></div>
-      </div>
-    </section>
+      <div id="notice" class="toast hidden" role="status"></div>
+      <section id="view-home" class="view">
+        <div class="section-heading"><div><span class="eyebrow">DAILY PLAY</span><h1>Make the sun shine</h1><p>Tap, collect points, and grow your garden.</p></div><span class="live-pill"><i></i> LIVE</span></div>
+        <div class="tap-card">
+          <div class="tap-card-head"><div><span class="eyebrow">SUN HARVEST</span><h2>Tap to earn</h2></div><div class="energy-mini"><span>⚡</span><strong id="tapEnergy">100/100</strong></div></div>
+          <button id="tapButton" class="sun-tap" aria-label="Tap to earn SUN"><span class="tap-rays"></span><span class="tap-sun">☀</span><span class="tap-plus">+SUN</span></button>
+          <p class="tap-caption">Every tap uses 1 energy · <strong id="tapHint">+1 SUN per tap</strong></p>
+          <div class="energy-track"><span id="energyBar"></span></div>
+          <div class="tap-card-footer"><span>Energy regenerates over time</span><button id="checkinButton" class="button button-gold">Claim daily bonus <span>↗</span></button></div>
+        </div>
+        <div class="section-heading compact"><div><span class="eyebrow">YOUR PROGRESS</span><h2>Quick overview</h2></div></div>
+        <div class="overview-grid"><button class="feature-tile" data-goto="tasks"><span class="tile-icon">✦</span><strong>Daily tasks</strong><small>Complete & earn rewards</small><span class="tile-arrow">↗</span></button><button class="feature-tile" data-goto="garden"><span class="tile-icon">🌱</span><strong>My garden</strong><small>Plant, water, harvest</small><span class="tile-arrow">↗</span></button></div>
+        <div class="panel activity-panel"><div class="panel-heading"><div><span class="eyebrow">HISTORY</span><h2>Recent activity</h2></div><span class="history-mark">↻</span></div><div id="ledger" class="activity-list"><p class="empty-state">Loading activity…</p></div></div>
+      </section>
 
-    <section id="view-tasks" class="view hidden">
-      <div class="panel"><h2>Tasks</h2><p class="muted">Submit completed tasks for manual review. Rewards are granted only after approval.</p><div id="tasks" class="list"></div></div>
-      <div class="panel"><h3>Social links</h3><div id="socialLinks" class="list"></div></div>
-    </section>
+      <section id="view-tasks" class="view hidden">
+        <div class="section-heading"><div><span class="eyebrow">EARN MORE</span><h1>Tasks & socials</h1><p>Complete community missions to earn SUN.</p></div><span class="heading-icon">✦</span></div>
+        <div class="notice-card"><span class="notice-icon">ⓘ</span><p>Some tasks need admin review. Rewards are added after approval.</p></div>
+        <div class="panel"><div class="panel-heading"><div><span class="eyebrow">MISSIONS</span><h2>Available tasks</h2></div></div><div id="tasks" class="card-list"><p class="empty-state">Loading tasks…</p></div></div>
+        <div class="panel"><div class="panel-heading"><div><span class="eyebrow">OUR COMMUNITY</span><h2>Social channels</h2></div></div><div id="socialLinks" class="card-list"><p class="empty-state">Loading links…</p></div></div>
+      </section>
 
-    <section id="view-shop" class="view hidden">
-      <div class="panel"><h2>Item Shop</h2><p class="muted">Prices and purchases are verified by the server.</p><div id="shopItems" class="list"></div></div>
-      <div class="panel"><h3>Your inventory</h3><p>Seeds: <strong id="seeds">0</strong></p><p>Spin tickets: <strong id="spinTickets">0</strong></p><p>Tap power: <strong id="inventoryTapPower">1</strong></p><button id="spinButton" class="secondary">Use spin ticket</button></div>
-    </section>
+      <section id="view-garden" class="view hidden">
+        <div class="section-heading"><div><span class="eyebrow">GROW YOUR REWARDS</span><h1>Sun garden</h1><p>Plant a seed, nurture it, and harvest SUN.</p></div><span class="heading-icon">🌱</span></div>
+        <div class="garden-scene"><div class="garden-sun">☀</div><div id="gardenPlantArt" class="plant-art"><span class="plant-stem"></span><span class="leaf leaf-left"></span><span class="leaf leaf-right"></span><span class="plant-flower">✦</span></div><div class="garden-ground"></div><div class="garden-caption"><strong id="gardenStatus">Checking garden access…</strong><small id="gardenSubStatus">Your garden is waiting for you.</small></div></div>
+        <div class="panel garden-progress-panel"><div class="panel-heading"><div><span class="eyebrow">GROWTH STATUS</span><h2><span id="plantGrowth">0</span>% grown</h2></div><span class="growth-badge">+150 SUN / harvest</span></div><div class="progress-track"><span id="plantProgress"></span></div><div class="growth-scale"><span>Seedling</span><span>Ready to harvest</span></div><div class="garden-actions"><button id="buySeedButton" class="button button-secondary">＋ Buy seed <small>100 SUN</small></button><button id="plantButton" class="button button-primary">♧ Plant seed</button><button id="waterButton" class="button button-secondary">💧 Water <small>10 SUN</small></button><button id="harvestButton" class="button button-gold">✦ Harvest</button></div><p class="helper-text">Garden access requires verified channel membership and 3 eligible referrals.</p><button id="verifyPlantButton" class="text-action">↻ Check access again</button></div>
+        <div class="panel"><div class="panel-heading"><div><span class="eyebrow">GARDEN GUIDE</span><h2>How it works</h2></div></div><div class="guide-list"><div><span>01</span><p><strong>Unlock your garden</strong><small>Join our channel and invite 3 eligible friends.</small></p></div><div><span>02</span><p><strong>Plant a seed</strong><small>Buy a seed from the shop, then plant it.</small></p></div><div><span>03</span><p><strong>Water & harvest</strong><small>Water 4 times to reach 100% growth and collect 150 SUN.</small></p></div></div></div>
+      </section>
 
-    <section id="view-garden" class="view hidden">
-      <div class="panel"><h2>Garden</h2><p id="gardenStatus" class="muted">Garden status loading…</p><div class="progress"><span id="plantProgress"></span></div><p>Growth: <strong id="plantGrowth">0</strong>%</p><div class="button-row"><button id="buySeedButton" class="secondary">Buy seed</button><button id="plantButton" class="secondary">Plant seed</button><button id="waterButton" class="secondary">Water (10 SUN)</button><button id="harvestButton" class="primary">Harvest</button></div><p class="muted">Garden requires verified channel membership and 3 eligible referrals.</p></div>
-    </section>
+      <section id="view-shop" class="view hidden">
+        <div class="section-heading"><div><span class="eyebrow">UPGRADE YOUR GAME</span><h1>Item shop</h1><p>Spend SUN on tools, boosts, and upgrades.</p></div><span class="heading-icon">▦</span></div>
+        <div class="shop-wallet"><div><small>AVAILABLE TO SPEND</small><strong><span id="shopBalance">0</span> <em>SUN</em></strong></div><span class="shop-coin">☀</span></div>
+        <div class="shop-category"><span>FEATURED ITEMS</span><i></i></div><div id="shopItems" class="shop-grid"><p class="empty-state">Loading shop…</p></div>
+        <div class="section-heading compact shop-subhead"><div><span class="eyebrow">PERMANENT BOOSTS</span><h2>Upgrade cards</h2><p>Improve your earning power.</p></div></div>
+        <div id="upgradeCards" class="upgrade-grid"><p class="empty-state">Loading upgrades…</p></div>
+        <div class="panel inventory-panel"><div class="panel-heading"><div><span class="eyebrow">YOUR ITEMS</span><h2>Inventory</h2></div></div><div class="inventory-grid"><div><span class="inventory-icon">🌱</span><small>Seeds</small><strong id="inventorySeeds">0</strong></div><div><span class="inventory-icon">🎟</span><small>Spin tickets</small><strong id="spinTickets">0</strong></div><div><span class="inventory-icon">⚡</span><small>Tap power</small><strong id="inventoryTapPower">1</strong></div></div><button id="spinButton" class="button button-secondary full-width">🎡 Use a spin ticket</button></div>
+      </section>
 
-    <section id="view-wallet" class="view hidden">
-      <div class="panel"><h2>Wallet & withdrawals</h2><p id="vipStatus" class="muted">VIP status loading…</p><label for="withdrawPoints">Points to request</label><input id="withdrawPoints" type="number" min="1000" step="1" value="1000"><label for="withdrawMethod">Method</label><select id="withdrawMethod"><option value="manual_review">Manual review</option><option value="TON">TON</option><option value="USDT">USDT</option><option value="KBZPay">KBZPay</option><option value="WavePay">WavePay</option></select><button id="withdrawButton" class="primary">Submit withdrawal request</button><p class="muted">VIP is required. Requests are manually reviewed; a request does not guarantee payout.</p></div>
-    </section>
+      <section id="view-wallet" class="view hidden">
+        <div class="section-heading"><div><span class="eyebrow">ACCOUNT & PAYOUTS</span><h1>Wallet</h1><p>Connect a TON wallet and manage requests.</p></div><span class="heading-icon">◈</span></div>
+        <div class="wallet-connect-card"><div class="wallet-emblem">◈</div><div class="wallet-copy"><strong id="walletTitle">Connect TON wallet</strong><p id="walletDescription">Link your wallet address to your SUN REWARD profile.</p></div><span id="walletStatus" class="wallet-status">Not connected</span><div id="tonConnectButton" class="ton-connect-root"></div><button id="disconnectWalletButton" class="button button-secondary full-width hidden">Disconnect wallet</button><p class="helper-text">Connection uses TON Connect. This links an address only; it does not send funds or prove payout eligibility.</p></div>
+        <div class="panel payout-panel"><div class="panel-heading"><div><span class="eyebrow">WITHDRAWALS</span><h2>Request a payout</h2></div><span class="lock-icon">♙</span></div><div id="vipStatus" class="vip-banner">Checking VIP status…</div><label for="withdrawPoints">SUN points</label><input id="withdrawPoints" type="number" min="1000" step="1" value="1000"><label for="withdrawMethod">Payout method</label><select id="withdrawMethod"><option value="manual_review">Manual review</option><option value="TON">TON</option><option value="USDT">USDT</option><option value="KBZPay">KBZPay</option><option value="WavePay">WavePay</option></select><button id="withdrawButton" class="button button-primary full-width">Submit withdrawal request <span>↗</span></button><p class="helper-text">VIP is required. Requests are manually reviewed; approval does not automatically transfer funds.</p></div>
+        <div class="panel profile-panel"><div class="panel-heading"><div><span class="eyebrow">YOUR ACCOUNT</span><h2>Profile & referrals</h2></div></div><div class="profile-row"><div class="profile-avatar-large" id="profileAvatarLarge">S</div><div><strong id="profileName">Telegram user</strong><small id="profileUsername">Loading…</small></div><span id="profileVip" class="vip-tag">NO VIP</span></div><div class="profile-info"><div><small>Channel membership</small><strong id="channelStatus">Not verified</strong></div><div><small>Referral count</small><strong id="walletReferrals">0 friends</strong></div></div><label for="referralLink">Your invite link</label><div class="copy-row"><input id="referralLink" readonly placeholder="Referral link unavailable"><button id="copyReferralButton" class="button button-secondary">Copy</button></div></div>
+      </section>
 
-    <section id="view-profile" class="view hidden">
-      <div class="panel"><h2>Profile</h2><p id="profileName">Loading…</p><p id="profileUsername" class="muted"></p><p>VIP: <strong id="profileVip">No</strong></p><p>Channel membership: <strong id="channelStatus">Not verified</strong></p><p>Referral link</p><input id="referralLink" readonly placeholder="Referral link unavailable"><button id="copyReferralButton" class="secondary">Copy referral link</button><button id="verifyPlantButton" class="secondary">Refresh channel / garden status</button></div>
-    </section>
+      <section id="view-profile" class="view hidden">
+        <div class="section-heading"><div><span class="eyebrow">SETTINGS</span><h1>Your profile</h1><p>Account details and app management.</p></div><span class="heading-icon">♙</span></div><div class="panel profile-panel"><div class="profile-row"><div class="profile-avatar-large" id="profileAvatarLargeAlt">S</div><div><strong id="profileNameAlt">Telegram user</strong><small id="profileUsernameAlt">Loading…</small></div><span id="profileVipAlt" class="vip-tag">NO VIP</span></div><div class="profile-info"><div><small>Account created</small><strong id="accountCreated">—</strong></div><div><small>Channel status</small><strong id="channelStatusAlt">Not verified</strong></div></div><button class="button button-secondary full-width" data-goto="wallet">Manage wallet & referrals</button></div>
+      </section>
 
-    <section id="view-admin" class="view hidden">
-      <div class="panel"><h2>Admin tools</h2><p class="muted">Only use this panel on a trusted private device. Do not publish the admin key in frontend code.</p><label for="adminKey">Admin key (session only)</label><input id="adminKey" type="password" autocomplete="off" placeholder="Enter admin key"><button id="saveAdminKey" class="secondary">Use admin key</button></div>
-      <div class="panel"><h3>Create task</h3><label for="newTaskId">Task ID (letters, numbers, _ or -)</label><input id="newTaskId" placeholder="follow_channel"><label for="newTaskTitle">Title</label><input id="newTaskTitle" maxlength="120" placeholder="Follow our channel"><label for="newTaskDescription">Description</label><textarea id="newTaskDescription" maxlength="1000" placeholder="What should the user do?"></textarea><label for="newTaskUrl">HTTPS URL (optional)</label><input id="newTaskUrl" placeholder="https://t.me/your_channel"><label for="newTaskPoints">Reward points</label><input id="newTaskPoints" type="number" min="0" max="1000000" value="20"><button id="createTaskButton" class="primary">Create task</button><div id="adminTasks" class="list"></div></div>
-      <div class="panel"><h3>Social links</h3><label for="newLinkId">Link ID</label><input id="newLinkId" placeholder="telegram"><label for="newLinkTitle">Title</label><input id="newLinkTitle" placeholder="Telegram Channel"><label for="newLinkUrl">HTTPS URL</label><input id="newLinkUrl" placeholder="https://t.me/your_channel"><button id="createLinkButton" class="primary">Add social link</button><div id="adminLinks" class="list"></div></div>
-      <div class="panel"><h3>Task claims for review</h3><div id="adminClaims" class="list"></div></div>
-      <div class="panel"><h3>Withdrawal requests</h3><div id="adminWithdrawals" class="list"></div></div>
-    </section>
-  </main>
-
-  <footer><button id="showAdminButton" class="text-button">Admin</button><span> SUN REWARD · Points have no guaranteed cash value</span></footer>
+      <section id="view-admin" class="view hidden">
+        <div class="section-heading"><div><span class="eyebrow">ADMIN CONSOLE</span><h1>Manage SUN REWARD</h1><p>Private admin tools. Never share your admin key.</p></div></div>
+        <div class="panel"><label for="adminKey">Admin key</label><input id="adminKey" type="password" autocomplete="off" placeholder="Enter admin key"><button id="saveAdminKey" class="button button-primary full-width">Unlock admin tools</button></div>
+        <div class="panel"><div class="panel-heading"><h2>Create task</h2></div><label for="newTaskId">Task ID</label><input id="newTaskId" placeholder="follow_channel"><label for="newTaskTitle">Title</label><input id="newTaskTitle" maxlength="120" placeholder="Follow our channel"><label for="newTaskDescription">Description</label><textarea id="newTaskDescription" maxlength="1000" placeholder="What should the user do?"></textarea><label for="newTaskUrl">HTTPS URL (optional)</label><input id="newTaskUrl" placeholder="https://t.me/your_channel"><label for="newTaskPoints">Reward points</label><input id="newTaskPoints" type="number" min="0" max="1000000" value="20"><button id="createTaskButton" class="button button-primary full-width">＋ Create task</button><div id="adminTasks" class="card-list"></div></div>
+        <div class="panel"><div class="panel-heading"><h2>Manage social links</h2></div><label for="newLinkId">Link ID</label><input id="newLinkId" placeholder="telegram"><label for="newLinkTitle">Title</label><input id="newLinkTitle" placeholder="Telegram Channel"><label for="newLinkUrl">HTTPS URL</label><input id="newLinkUrl" placeholder="https://t.me/your_channel"><button id="createLinkButton" class="button button-primary full-width">＋ Add social link</button><div id="adminLinks" class="card-list"></div></div>
+        <div class="panel"><div class="panel-heading"><h2>Task claims for review</h2></div><div id="adminClaims" class="card-list"></div></div><div class="panel"><div class="panel-heading"><h2>Withdrawal requests</h2></div><div id="adminWithdrawals" class="card-list"></div></div>
+      </section>
+    </main>
+    <footer class="app-footer"><button id="showAdminButton" class="admin-link">Admin console</button><span>© SUN REWARD · Points have no guaranteed cash value</span></footer>
+  </div>
 </body>
 </html>
