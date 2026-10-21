@@ -47,3 +47,28 @@ TON Connect requires a public manifest URL and an HTTPS app domain. The app stor
 ## Important payout note
 
 Withdrawal requests are records for manual review. Marking a request approved in the admin panel only changes its status; it does not transfer TON, USDT, KBZPay, or WavePay funds.
+
+
+## Secure shop purchase & inventory APIs
+
+Shop cards are now stored in SQLite (`shop_items`) and can be managed from the Admin console. Purchases are processed on the server in a SQLite transaction: the server looks up the active price, conditionally deducts SUN, applies an allowlisted effect, records the ledger entry and purchase record, and updates inventory. A client-supplied `requestId` is stored with a unique per-user index to prevent the same request from deducting SUN twice on retry.
+
+- `GET /api/shop` — active cards and the signed-in user's inventory summary.
+- `GET /api/inventory` — signed-in user's item inventory; cannot query another user.
+- `POST /api/shop/buy` — body: `{ "itemId": "seed", "requestId": "unique-request-id" }`.
+- `GET /api/admin/shop-items` — list cards (admin key required).
+- `POST /api/admin/shop-items` — create a card (admin key required).
+- `PATCH /api/admin/shop-items/:id` — edit price/title/description/category/effect/quantity/visibility.
+- `DELETE /api/admin/shop-items/:id` — disables a card rather than deleting purchase history or inventory.
+- `GET /api/admin/shop-purchases` — recent purchase audit history.
+- `GET /api/admin/inventory/:telegramId` — inspect a user's inventory (admin key required).
+
+Allowed effects are `seed`, `spin_ticket`, `energy_refill`, `tap_power`, and `inventory`. `inventory` grants a collectible inventory entry; it does not execute arbitrary code or arbitrary database updates. Admin must use a unique card ID. Do not expose `ADMIN_KEY` in public code or screenshots.
+
+### Existing database compatibility
+
+New tables and the nullable `shop_purchases.request_id` column are created/migrated automatically without deleting the existing `data.sqlite`. Back up `data.sqlite` before deployment. Existing default card IDs and current prices are inserted only when missing, so admin changes are not overwritten on restart. The original `users.seeds` and `users.spin_tickets` counters remain supported while new purchases also create inventory records.
+
+### Verification status
+
+`node --check server.js` and `node --check app.js` pass. Full integration tests were not run in this environment because the `better-sqlite3` package is not installed here; run `npm install` and test purchases on a backed-up development database before production use.

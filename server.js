@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS shop_purchases (
  id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id TEXT NOT NULL,
  item_id TEXT NOT NULL, cost INTEGER NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS shop_items (
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+ cost INTEGER NOT NULL CHECK(cost >= 0), category TEXT NOT NULL DEFAULT 'item',
+ effect TEXT NOT NULL DEFAULT 'inventory', quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity >= 1),
+ active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inventory_items (
+ telegram_id TEXT NOT NULL, item_id TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+ updated_at TEXT NOT NULL, PRIMARY KEY(telegram_id,item_id)
+);
 CREATE TABLE IF NOT EXISTS managed_tasks (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
  url TEXT NOT NULL DEFAULT '', points INTEGER NOT NULL DEFAULT 0,
@@ -109,6 +119,8 @@ addColumnIfMissing("users", "plant_growth", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfMissing("users", "plant_planted_at", "TEXT");
 addColumnIfMissing("users", "wallet_address", "TEXT");
 addColumnIfMissing("users", "wallet_chain", "TEXT");
+addColumnIfMissing("shop_purchases", "request_id", "TEXT");
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_purchase_request ON shop_purchases(telegram_id,request_id) WHERE request_id IS NOT NULL"); } catch (e) { console.error("Could not create purchase idempotency index:", e.message); }
 
 const now = () => new Date().toISOString();
 const utcDay = () => new Date().toISOString().slice(0, 10);
@@ -252,13 +264,32 @@ function requirePlantAccess(req,res) {
   }
   return user;
 }
-const shopItems = [
-  {id:"seed",title:"Plant Seed",description:"A seed for your garden. Plant it after unlocking garden access.",cost:SEED_COST,category:"item"},
-  {id:"spin_ticket",title:"Spin Ticket",description:"Try your luck for extra SUN points.",cost:SPIN_TICKET_COST,category:"item"},
-  {id:"energy_refill",title:"Energy Refill",description:"Restore your energy to the maximum instantly.",cost:150,category:"item"},
-  {id:"tap_upgrade",title:"Tap Power +1",description:"Permanently earn one more SUN per tap.",cost:UPGRADE_COST,category:"upgrade"},
-  {id:"tap_upgrade_5",title:"Tap Power +5",description:"A bigger permanent boost for active players.",cost:1000,category:"upgrade"}
+// Shop catalog is database-backed so admins can safely add/edit/disable cards.
+// Existing default IDs and costs are retained for compatibility with current users.
+const defaultShopItems = [
+  {id:"seed",title:"Plant Seed",description:"A seed for your garden. Plant it after unlocking garden access.",cost:SEED_COST,category:"item",effect:"seed",quantity:1},
+  {id:"spin_ticket",title:"Spin Ticket",description:"Try your luck for extra SUN points.",cost:SPIN_TICKET_COST,category:"item",effect:"spin_ticket",quantity:1},
+  {id:"energy_refill",title:"Energy Refill",description:"Restore your energy to the maximum instantly.",cost:150,category:"item",effect:"energy_refill",quantity:1},
+  {id:"tap_upgrade",title:"Tap Power +1",description:"Permanently earn one more SUN per tap.",cost:UPGRADE_COST,category:"upgrade",effect:"tap_power",quantity:1},
+  {id:"tap_upgrade_5",title:"Tap Power +5",description:"A bigger permanent boost for active players.",cost:1000,category:"upgrade",effect:"tap_power",quantity:5}
 ];
+for (const item of defaultShopItems) {
+  db.prepare(`INSERT OR IGNORE INTO shop_items(id,title,description,cost,category,effect,quantity,active,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,1,?,?)`).run(item.id,item.title,item.description,item.cost,item.category,item.effect,item.quantity,now(),now());
+}
+function getShopItems(activeOnly = true) {
+  return db.prepare(`SELECT id,title,description,cost,category,effect,quantity,active FROM shop_items ${activeOnly ? "WHERE active=1" : ""} ORDER BY category DESC,title COLLATE NOCASE`).all();
+}
+function addInventory(telegramId, itemId, quantity = 1) {
+  db.prepare(`INSERT INTO inventory_items(telegram_id,item_id,quantity,updated_at) VALUES(?,?,?,?)
+    ON CONFLICT(telegram_id,item_id) DO UPDATE SET quantity=inventory_items.quantity+excluded.quantity,updated_at=excluded.updated_at`)
+    .run(telegramId,itemId,quantity,now());
+}
+function removeInventory(telegramId, itemId, quantity = 1) {
+  const row = db.prepare("SELECT quantity FROM inventory_items WHERE telegram_id=? AND item_id=?").get(telegramId,itemId);
+  if (!row || row.quantity < quantity) throw new Error("Not enough items in inventory.");
+  db.prepare("UPDATE inventory_items SET quantity=quantity-?,updated_at=? WHERE telegram_id=? AND item_id=?").run(quantity,now(),telegramId,itemId);
+}
 
 // Serve frontend after API routes have been registered.
 app.get("/health",(req,res)=>res.json({ok:true,app:"SUN REWARD"}));
@@ -340,11 +371,14 @@ app.post("/api/plant/buy-seed",auth,(req,res)=>{
   const user=requirePlantAccess(req,res); if(!user)return;
   try {
     db.transaction(()=>{
-      const fresh=db.prepare("SELECT points FROM users WHERE telegram_id=?").get(user.telegram_id);
-      if(fresh.points<SEED_COST)throw new Error(`You need ${SEED_COST} SUN to buy a seed.`);
-      db.prepare("UPDATE users SET points=points-?,seeds=seeds+1 WHERE telegram_id=?").run(SEED_COST,user.telegram_id);
-      addLedger(user.telegram_id,-SEED_COST,"Bought plant seed");
-      db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at) VALUES(?,'seed',?,?)").run(user.telegram_id,SEED_COST,now());
+      const item=db.prepare("SELECT * FROM shop_items WHERE id='seed' AND active=1 AND effect='seed'").get();
+      if(!item)throw new Error("Plant seeds are not available in the shop right now.");
+      const debit=db.prepare("UPDATE users SET points=points-?,seeds=seeds+? WHERE telegram_id=? AND points>=?")
+        .run(item.cost,item.quantity,user.telegram_id,item.cost);
+      if(!debit.changes)throw new Error(`You need ${item.cost} SUN to buy a seed.`);
+      addInventory(user.telegram_id,"seed",item.quantity);
+      addLedger(user.telegram_id,-item.cost,`Bought plant seed: ${item.title}`);
+      db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at) VALUES(?,?,?,?)").run(user.telegram_id,item.id,item.cost,now());
     })(); res.json({ok:true,message:"Seed purchased."});
   } catch(e){res.status(400).json({error:e.message});}
 });
@@ -354,6 +388,8 @@ app.post("/api/plant/plant",auth,(req,res)=>{
     const fresh=db.prepare("SELECT seeds,plant_stage FROM users WHERE telegram_id=?").get(user.telegram_id);
     if(fresh.plant_stage>0)throw new Error("You already have a plant growing.");
     if(fresh.seeds<1)throw new Error("Buy a seed before planting.");
+    const inv=db.prepare("SELECT quantity FROM inventory_items WHERE telegram_id=? AND item_id='seed'").get(user.telegram_id);
+    if(inv && inv.quantity>0) removeInventory(user.telegram_id,"seed",1);
     db.prepare("UPDATE users SET seeds=seeds-1,plant_stage=1,plant_growth=0,plant_planted_at=? WHERE telegram_id=?").run(now(),user.telegram_id);
   });
   try{result();res.json({ok:true,message:"Seed planted."});}catch(e){res.status(400).json({error:e.message});}
@@ -386,27 +422,65 @@ app.post("/api/plant/harvest",auth,(req,res)=>{
 
 app.get("/api/shop",auth,(req,res)=>{
   const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
-  res.json({items:shopItems,inventory:{seeds:user.seeds,spinTickets:user.spin_tickets,tapPower:user.tap_power}});
+  const inventory=db.prepare(`SELECT i.item_id AS itemId,i.quantity,s.title,s.category,s.effect
+    FROM inventory_items i LEFT JOIN shop_items s ON s.id=i.item_id WHERE i.telegram_id=? AND i.quantity>0 ORDER BY s.category DESC,s.title COLLATE NOCASE`).all(user.telegram_id);
+  res.json({items:getShopItems(true).map(({effect,...item})=>item),inventory:{seeds:user.seeds,spinTickets:user.spin_tickets,tapPower:user.tap_power,items:inventory}});
 });
-app.post("/api/shop/buy",auth,(req,res)=>{
+app.get("/api/inventory",auth,(req,res)=>{
   const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
-  const item=shopItems.find(x=>x.id===req.body?.itemId);
-  if(!item)return res.status(400).json({error:"Unknown shop item."});
-  try {
-    db.transaction(()=>{
-      const fresh=db.prepare("SELECT points FROM users WHERE telegram_id=?").get(user.telegram_id);
-      if(fresh.points<item.cost)throw new Error("Not enough SUN points.");
-      db.prepare("UPDATE users SET points=points-? WHERE telegram_id=?").run(item.cost,user.telegram_id);
-      if(item.id==="seed")db.prepare("UPDATE users SET seeds=seeds+1 WHERE telegram_id=?").run(user.telegram_id);
-      if(item.id==="spin_ticket")db.prepare("UPDATE users SET spin_tickets=spin_tickets+1 WHERE telegram_id=?").run(user.telegram_id);
-      if(item.id==="tap_upgrade")db.prepare("UPDATE users SET tap_power=MIN(100,tap_power+1) WHERE telegram_id=?").run(user.telegram_id);
-      if(item.id==="tap_upgrade_5")db.prepare("UPDATE users SET tap_power=MIN(100,tap_power+5) WHERE telegram_id=?").run(user.telegram_id);
-      if(item.id==="energy_refill")db.prepare("UPDATE users SET energy=?,energy_updated_at=? WHERE telegram_id=?").run(MAX_ENERGY,now(),user.telegram_id);
-      addLedger(user.telegram_id,-item.cost,`Shop purchase: ${item.title}`);
-      db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at) VALUES(?,?,?,?)").run(user.telegram_id,item.id,item.cost,now());
-    })();res.json({ok:true,message:`${item.title} purchased.`});
-  }catch(e){res.status(400).json({error:e.message});}
+  const items=db.prepare(`SELECT i.item_id AS itemId,i.quantity,s.title,s.description,s.category,s.effect
+    FROM inventory_items i LEFT JOIN shop_items s ON s.id=i.item_id WHERE i.telegram_id=? AND i.quantity>0 ORDER BY s.category DESC,s.title COLLATE NOCASE`).all(user.telegram_id);
+  res.json({items,legacy:{seeds:user.seeds,spinTickets:user.spin_tickets,tapPower:user.tap_power}});
 });
+app.post("/api/shop/buy",auth,claimLimiter,(req,res)=>{
+  const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
+  const itemId=String(req.body?.itemId||"");
+  const requestId=String(req.body?.requestId||"").trim();
+  if(requestId && !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)) return res.status(400).json({error:"Invalid purchase request ID."});
+  try {
+    const result=db.transaction(()=>{
+      if(requestId){
+        const previous=db.prepare("SELECT id,item_id,cost,created_at FROM shop_purchases WHERE telegram_id=? AND request_id=?").get(user.telegram_id,requestId);
+        if(previous)return {duplicate:true,purchase:previous};
+      }
+      const item=db.prepare("SELECT * FROM shop_items WHERE id=? AND active=1").get(itemId);
+      if(!item)throw new Error("This shop item is unavailable.");
+      if(!Number.isSafeInteger(item.cost)||item.cost<0)throw new Error("Invalid shop item price.");
+      const fresh=db.prepare("SELECT points,energy,tap_power FROM users WHERE telegram_id=?").get(user.telegram_id);
+      if(!fresh || fresh.points<item.cost)throw new Error("Not enough SUN points.");
+      // Deduct points conditionally inside the same SQLite transaction to prevent race-based overspending.
+      const debit=db.prepare("UPDATE users SET points=points-? WHERE telegram_id=? AND points>=?").run(item.cost,user.telegram_id,item.cost);
+      if(!debit.changes)throw new Error("Not enough SUN points.");
+      switch(item.effect){
+        case "seed":
+          db.prepare("UPDATE users SET seeds=seeds+? WHERE telegram_id=?").run(item.quantity,user.telegram_id);
+          addInventory(user.telegram_id,item.id,item.quantity); break;
+        case "spin_ticket":
+          db.prepare("UPDATE users SET spin_tickets=spin_tickets+? WHERE telegram_id=?").run(item.quantity,user.telegram_id);
+          addInventory(user.telegram_id,item.id,item.quantity); break;
+        case "energy_refill":
+          db.prepare("UPDATE users SET energy=?,energy_updated_at=? WHERE telegram_id=?").run(MAX_ENERGY,now(),user.telegram_id); break;
+        case "tap_power":
+          db.prepare("UPDATE users SET tap_power=MIN(100,tap_power+?) WHERE telegram_id=?").run(item.quantity,user.telegram_id);
+          addInventory(user.telegram_id,item.id,item.quantity); break;
+        case "inventory":
+          addInventory(user.telegram_id,item.id,item.quantity); break;
+        default: throw new Error("This item has an unsupported effect. Ask admin to edit it.");
+      }
+      addLedger(user.telegram_id,-item.cost,`Shop purchase: ${item.title}`);
+      const purchase=db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at,request_id) VALUES(?,?,?,?,?)")
+        .run(user.telegram_id,item.id,item.cost,now(),requestId||null);
+      return {duplicate:false,purchase:{id:Number(purchase.lastInsertRowid),item_id:item.id,cost:item.cost},item};
+    })();
+    if(result.duplicate)return res.json({ok:true,duplicate:true,message:"This purchase was already processed.",purchase:result.purchase});
+    const fresh=db.prepare("SELECT points,seeds,spin_tickets,tap_power,energy FROM users WHERE telegram_id=?").get(user.telegram_id);
+    res.json({ok:true,message:`${result.item.title} purchased successfully.`,purchase:result.purchase,balance:fresh.points,inventory:{seeds:fresh.seeds,spinTickets:fresh.spin_tickets,tapPower:fresh.tap_power,energy:fresh.energy}});
+  }catch(e){
+    if(String(e.code||"").startsWith("SQLITE_CONSTRAINT"))return res.status(409).json({error:"This purchase request has already been processed."});
+    res.status(400).json({error:e.message});
+  }
+});
+
 app.post("/api/spin",auth,(req,res)=>{
   const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
   const rewards=[{points:0,weight:20},{points:5,weight:35},{points:10,weight:25},{points:25,weight:15},{points:50,weight:5}];
@@ -416,6 +490,8 @@ app.post("/api/spin",auth,(req,res)=>{
       const fresh=db.prepare("SELECT spin_tickets FROM users WHERE telegram_id=?").get(user.telegram_id);
       if(!fresh||fresh.spin_tickets<1)throw new Error("You need a spin ticket.");
       db.prepare("UPDATE users SET spin_tickets=spin_tickets-1 WHERE telegram_id=?").run(user.telegram_id);
+      const inv=db.prepare("SELECT quantity FROM inventory_items WHERE telegram_id=? AND item_id='spin_ticket'").get(user.telegram_id);
+      if(inv && inv.quantity>0) removeInventory(user.telegram_id,"spin_ticket",1);
       let roll=crypto.randomInt(total),reward=rewards[0];
       for(const r of rewards){if(roll<r.weight){reward=r;break;}roll-=r.weight;}
       if(reward.points>0){db.prepare("UPDATE users SET points=points+? WHERE telegram_id=?").run(reward.points,user.telegram_id);addLedger(user.telegram_id,reward.points,"Spin reward");}
@@ -483,6 +559,63 @@ app.get("/api/social-links",(req,res)=>{
 });
 
 // -------------------- Admin APIs --------------------
+const validShopEffect = new Set(["seed","spin_ticket","energy_refill","tap_power","inventory"]);
+function validateShopItemBody(body, old = null) {
+  const b=body||{};
+  const id=old?old.id:String(b.id||"").trim();
+  const title=b.title===undefined?(old?.title||""):String(b.title).trim();
+  const description=b.description===undefined?(old?.description||""):String(b.description).trim();
+  const cost=b.cost===undefined ? (old ? old.cost : Number(b.cost)) : Number(b.cost);
+  const category=b.category===undefined?(old?.category||"item"):String(b.category);
+  const effect=b.effect===undefined?(old?.effect||"inventory"):String(b.effect);
+  const quantity=b.quantity===undefined?(old?.quantity||1):Number(b.quantity);
+  const active=b.active===undefined?(old?.active??1):b.active;
+  if(!validTaskId(id))throw new Error("Card ID must use 1-64 letters, numbers, underscores or hyphens.");
+  if(!title||title.length>100||description.length>500)throw new Error("Invalid card title or description.");
+  if(!Number.isSafeInteger(cost)||cost<0||cost>1000000000)throw new Error("Price must be an integer from 0 to 1,000,000,000 SUN.");
+  if(!["item","upgrade"].includes(category))throw new Error("Category must be item or upgrade.");
+  if(!validShopEffect.has(effect))throw new Error("Unsupported item effect.");
+  if(!Number.isSafeInteger(quantity)||quantity<1||quantity>1000)throw new Error("Quantity must be from 1 to 1000.");
+  if(![0,1,true,false].includes(active))throw new Error("active must be true or false.");
+  if(["seed","spin_ticket","energy_refill"].includes(effect)&&category!=="item")throw new Error("Seed, spin ticket and energy refill effects must use the item category.");
+  if(effect==="tap_power"&&category!=="upgrade")throw new Error("Tap power must be an upgrade.");
+  return {id,title,description,cost,category,effect,quantity,active:Number(Boolean(active))};
+}
+app.get("/api/admin/shop-items",isAdmin,(req,res)=>res.json({items:getShopItems(false)}));
+app.post("/api/admin/shop-items",isAdmin,(req,res)=>{
+  let item;try{item=validateShopItemBody(req.body);}catch(e){return res.status(400).json({error:e.message});}
+  try{
+    db.prepare(`INSERT INTO shop_items(id,title,description,cost,category,effect,quantity,active,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(item.id,item.title,item.description,item.cost,item.category,item.effect,item.quantity,item.active,now(),now());
+    res.status(201).json({ok:true,item});
+  }catch(e){if(String(e.code||"").startsWith("SQLITE_CONSTRAINT"))return res.status(409).json({error:"Card ID already exists."});res.status(500).json({error:"Could not create shop card."});}
+});
+app.patch("/api/admin/shop-items/:id",isAdmin,(req,res)=>{
+  const id=req.params.id;if(!validTaskId(id))return res.status(400).json({error:"Invalid card ID."});
+  const old=db.prepare("SELECT * FROM shop_items WHERE id=?").get(id);if(!old)return res.status(404).json({error:"Shop card not found."});
+  let item;try{item=validateShopItemBody(req.body,old);}catch(e){return res.status(400).json({error:e.message});}
+  db.prepare(`UPDATE shop_items SET title=?,description=?,cost=?,category=?,effect=?,quantity=?,active=?,updated_at=? WHERE id=?`)
+    .run(item.title,item.description,item.cost,item.category,item.effect,item.quantity,item.active,now(),id);
+  res.json({ok:true,item});
+});
+app.delete("/api/admin/shop-items/:id",isAdmin,(req,res)=>{
+  const id=req.params.id;if(!validTaskId(id))return res.status(400).json({error:"Invalid card ID."});
+  const result=db.prepare("UPDATE shop_items SET active=0,updated_at=? WHERE id=?").run(now(),id);
+  if(!result.changes)return res.status(404).json({error:"Shop card not found."});
+  res.json({ok:true,message:"Card disabled; purchase and inventory history retained."});
+});
+app.get("/api/admin/shop-purchases",isAdmin,(req,res)=>{
+  res.json({purchases:db.prepare(`SELECT p.id,p.telegram_id,p.item_id,s.title,p.cost,p.created_at,p.request_id
+    FROM shop_purchases p LEFT JOIN shop_items s ON s.id=p.item_id ORDER BY p.id DESC LIMIT 300`).all()});
+});
+app.get("/api/admin/inventory/:telegramId",isAdmin,(req,res)=>{
+  const id=String(req.params.telegramId);if(!validId(id))return res.status(400).json({error:"Invalid Telegram user ID."});
+  const user=db.prepare("SELECT telegram_id,seeds,spin_tickets,tap_power,energy FROM users WHERE telegram_id=?").get(id);
+  if(!user)return res.status(404).json({error:"User not found."});
+  const items=db.prepare(`SELECT i.item_id AS itemId,i.quantity,i.updated_at,s.title,s.category,s.effect
+    FROM inventory_items i LEFT JOIN shop_items s ON s.id=i.item_id WHERE i.telegram_id=? ORDER BY i.updated_at DESC`).all(id);
+  res.json({user,items});
+});
 app.get("/api/admin/tasks",isAdmin,(req,res)=>res.json({tasks:db.prepare("SELECT * FROM managed_tasks ORDER BY created_at DESC").all()}));
 app.post("/api/admin/tasks",isAdmin,(req,res)=>{
   const id=String(req.body?.id||"").trim(),title=String(req.body?.title||"").trim();

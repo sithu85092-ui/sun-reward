@@ -82,7 +82,8 @@
   }
   const shopIcons = { seed: '🌱', spin_ticket: '🎟️', tap_upgrade: '⚡', tap_upgrade_5: '🚀', energy_refill: '🔋' };
   async function buyItem(id) {
-    try { const result = await api('/api/shop/buy', { method: 'POST', body: JSON.stringify({ itemId: id }) }); show(result.message || 'Purchase complete.'); await loadMe(); }
+    try { const requestId = (window.crypto?.randomUUID?.() || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 100);
+      const result = await api('/api/shop/buy', { method: 'POST', body: JSON.stringify({ itemId: id, requestId }) }); show(result.message || 'Purchase complete.'); await loadMe(); }
     catch (e) { show(e.message, true); }
   }
   async function loadShop() {
@@ -99,6 +100,16 @@
       card.append(button('Buy item', () => buyItem(i.id), 'button button-primary')); root.append(card);
     });
     if (!upgradeItems.length) upgrades.append(el('p', 'empty-state', 'No upgrades available.'));
+    const inventoryRoot = $('inventoryOtherItems');
+    if (inventoryRoot) {
+      inventoryRoot.replaceChildren();
+      const owned = data.inventory?.items || [];
+      const extras = owned.filter(i => !['seed', 'spin_ticket', 'tap_upgrade', 'tap_upgrade_5'].includes(i.itemId));
+      if (extras.length) {
+        inventoryRoot.append(el('h3', 'inventory-extra-title', 'Other owned items'));
+        extras.forEach(i => inventoryRoot.append(el('div', 'activity-row', `${i.title || i.itemId} × ${i.quantity}`)));
+      }
+    }
     upgradeItems.forEach(i => {
       const card = el('article', 'upgrade-card');
       card.append(el('div', 'upgrade-art', shopIcons[i.id] || '✦'), el('h3', '', i.title), el('p', '', i.description || 'Upgrade your player stats.'), el('span', 'level-pill', 'PERMANENT UPGRADE'));
@@ -242,8 +253,21 @@
       show('Social link added.'); await loadAdmin(); await loadSocialLinks();
     } catch (e) { show(e.message, true); }
   });
+  $('createShopItemButton').addEventListener('click', async () => {
+    const payload = {
+      id: $('newShopItemId').value.trim(), title: $('newShopItemTitle').value.trim(),
+      description: $('newShopItemDescription').value.trim(), cost: Number($('newShopItemCost').value),
+      category: $('newShopItemCategory').value, effect: $('newShopItemEffect').value,
+      quantity: Number($('newShopItemQuantity').value), active: true
+    };
+    try {
+      await api('/api/admin/shop-items', { method: 'POST', body: JSON.stringify(payload) });
+      show('Shop card created.'); $('newShopItemId').value = ''; $('newShopItemTitle').value = ''; $('newShopItemDescription').value = '';
+      await loadAdmin(); await loadShop();
+    } catch (e) { show(e.message, true); }
+  });
   async function loadAdmin() {
-    const [tasks, links, claims, withdrawals] = await Promise.all([api('/api/admin/tasks'), api('/api/admin/social-links'), api('/api/admin/task-claims'), api('/api/admin/withdrawals')]);
+    const [tasks, links, claims, withdrawals, shop] = await Promise.all([api('/api/admin/tasks'), api('/api/admin/social-links'), api('/api/admin/task-claims'), api('/api/admin/withdrawals'), api('/api/admin/shop-items')]);
     const taskRoot = $('adminTasks'); taskRoot.replaceChildren();
     tasks.tasks.forEach(t => {
       const card = itemCard(`${t.title} (${t.id})`, `${t.points} SUN · ${t.active ? 'Active' : 'Disabled'}`);
@@ -256,6 +280,32 @@
         const points = Number(prompt('Reward points', String(t.points))); if (!Number.isSafeInteger(points)) return show('Invalid reward amount.', true);
         try { await api(`/api/admin/tasks/${encodeURIComponent(t.id)}`, { method: 'PATCH', body: JSON.stringify({ title, description, url, points }) }); show('Task updated.'); await loadAdmin(); await loadTasks(); } catch (e) { show(e.message, true); }
       })); card.append(actions); taskRoot.append(card);
+    });
+    const shopRoot = $('adminShopItems'); shopRoot.replaceChildren();
+    if (!shop.items.length) shopRoot.append(el('p', 'empty-state', 'No shop cards configured.'));
+    shop.items.forEach(item => {
+      const card = itemCard(`${item.title} (${item.id})`, `${Number(item.cost).toLocaleString()} SUN · ${item.category} · effect: ${item.effect} · qty ${item.quantity} · ${item.active ? 'Active' : 'Disabled'}`);
+      const actions = el('div', 'actions');
+      actions.append(button(item.active ? 'Hide card' : 'Show card', async () => {
+        try { await api(`/api/admin/shop-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ active: !item.active }) }); show('Shop card visibility updated.'); await loadAdmin(); await loadShop(); }
+        catch (e) { show(e.message, true); }
+      }));
+      actions.append(button('Edit card', async () => {
+        const title = prompt('Card title', item.title); if (title === null) return;
+        const description = prompt('Description', item.description || ''); if (description === null) return;
+        const cost = Number(prompt('Price in SUN (integer)', String(item.cost))); if (!Number.isSafeInteger(cost) || cost < 0) return show('Invalid price.', true);
+        const quantity = Number(prompt('Quantity granted (1–1000)', String(item.quantity))); if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1000) return show('Invalid quantity.', true);
+        const category = prompt('Category: item or upgrade', item.category); if (category === null) return;
+        const effect = prompt('Effect: seed, spin_ticket, energy_refill, tap_power, inventory', item.effect); if (effect === null) return;
+        try { await api(`/api/admin/shop-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify({ title, description, cost, quantity, category, effect }) }); show('Shop card updated.'); await loadAdmin(); await loadShop(); }
+        catch (e) { show(e.message, true); }
+      }));
+      actions.append(button('Remove', async () => {
+        if (!confirm(`Hide and remove ${item.title} from the active shop? Purchase history and inventory will be retained.`)) return;
+        try { await api(`/api/admin/shop-items/${encodeURIComponent(item.id)}`, { method: 'DELETE' }); show('Card disabled; old records retained.'); await loadAdmin(); await loadShop(); }
+        catch (e) { show(e.message, true); }
+      }));
+      card.append(actions); shopRoot.append(card);
     });
     const linkRoot = $('adminLinks'); linkRoot.replaceChildren();
     links.links.forEach(l => {
