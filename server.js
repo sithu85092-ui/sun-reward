@@ -293,7 +293,32 @@ function removeInventory(telegramId, itemId, quantity = 1) {
 
 // Serve frontend after API routes have been registered.
 app.get("/health",(req,res)=>res.json({ok:true,app:"SUN REWARD"}));
-app.get("/api/public-config",(req,res)=>res.json({tonConnectManifestUrl:TON_CONNECT_MANIFEST_URL}));
+// TON Connect manifest must use the real public HTTPS domain. When an explicit
+// URL is not configured, derive it from the deployment request host so the
+// example placeholder domain can never silently break wallet connection.
+function publicOrigin(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol;
+  return `${protocol}://${req.get("host")}`;
+}
+app.get("/tonconnect-manifest.json",(req,res)=>{
+  const origin = publicOrigin(req);
+  res.set("Cache-Control", "public, max-age=300");
+  res.json({
+    url: origin,
+    name: "SUN REWARD",
+    iconUrl: `${origin}/icon.svg`,
+    termsOfUseUrl: `${origin}/terms`,
+    privacyPolicyUrl: `${origin}/privacy`
+  });
+});
+app.get("/api/public-config",(req,res)=>{
+  const origin = publicOrigin(req);
+  const configured = TON_CONNECT_MANIFEST_URL.trim();
+  const isPlaceholder = !configured || /your-domain\.example/i.test(configured);
+  const manifestUrl = isPlaceholder ? `${origin}/tonconnect-manifest.json` : configured;
+  res.json({tonConnectManifestUrl:manifestUrl});
+});
 app.get("/api/wallet",auth,(req,res)=>{
   const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
   res.json({wallet:{address:user.wallet_address||null,chain:user.wallet_chain||null}});

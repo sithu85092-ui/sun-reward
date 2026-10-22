@@ -1,7 +1,7 @@
 {
-  "url": "https://your-domain.example",
+  "url": "https://your-deployed-domain.example",
   "name": "SUN REWARD",
-  "iconUrl": "https://your-domain.example/icon.png",
-  "termsOfUseUrl": "https://your-domain.example/terms",
-  "privacyPolicyUrl": "https://your-domain.example/privacy"
+  "iconUrl": "https://your-deployed-domain.example/icon.svg",
+  "termsOfUseUrl": "https://your-deployed-domain.example/terms",
+  "privacyPolicyUrl": "https://your-deployed-domain.example/privacy"
 }

@@ -141,7 +141,8 @@
       tonManifestUrl = cfg.tonConnectManifestUrl || '';
       if (!tonManifestUrl || !window.TON_CONNECT_UI?.TonConnectUI) {
         $('tonConnectButton').replaceChildren();
-        $('tonConnectButton').append(el('p', 'helper-text', !tonManifestUrl ? 'Wallet connection setup needed: set TON_CONNECT_MANIFEST_URL to your public tonconnect-manifest.json URL in server environment.' : 'TON Connect library did not load. Reload the app and try again.'));
+        $('tonConnectButton').append(el('p', 'helper-text', !tonManifestUrl ? 'Wallet setup error: the server did not provide a manifest URL. Check /api/public-config.' : 'TON Connect library did not load. Check internet access / CDN blocking, then reload the Mini App.'));
+        console.error('TON Connect unavailable', { manifestUrl: tonManifestUrl, libraryLoaded: Boolean(window.TON_CONNECT_UI?.TonConnectUI) });
         return;
       }
       tonUI = new window.TON_CONNECT_UI.TonConnectUI({ manifestUrl: tonManifestUrl, buttonRootId: 'tonConnectButton' });
@@ -159,7 +160,7 @@
       if (current?.account?.address) {
         try { await api('/api/wallet/connect', { method: 'POST', body: JSON.stringify({ address: current.account.address, chain: String(current.account.chain || '') }) }); renderWallet({ address: current.account.address }); } catch {}
       }
-    } catch (e) { console.warn('TON Connect setup failed:', e.message); }
+    } catch (e) { console.warn('TON Connect setup failed:', e); const root = $('tonConnectButton'); if (root) { root.replaceChildren(); root.append(el('p', 'helper-text', `Wallet connection failed: ${e.message || 'check public HTTPS manifest and TON Connect availability'}`)); } }
   }
   async function loadMe() {
     if (!tg?.initData) {
