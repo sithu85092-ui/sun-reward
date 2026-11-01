@@ -8,6 +8,10 @@ const Database = require("better-sqlite3");
 const path = require("path");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const { migrate, MICRO_PER_SUN } = require("./migrations");
+const { toMicro } = require("./amounts");
+const { verifyTelegramInitData } = require("./auth");
+const { decideWithdrawal } = require("./withdrawals");
 
 const app = express();
 app.disable("x-powered-by");
@@ -32,7 +36,7 @@ const SPIN_TICKET_COST = 100;
 const UPGRADE_COST = 250;
 const MIN_PLANT_REFERRALS = 3;
 
-const db = new Database(path.join(__dirname, "data.sqlite"));
+const db = new Database(process.env.DB_PATH || path.join(__dirname, "data.sqlite"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 db.pragma("busy_timeout = 5000");
@@ -121,6 +125,23 @@ addColumnIfMissing("users", "wallet_address", "TEXT");
 addColumnIfMissing("users", "wallet_chain", "TEXT");
 addColumnIfMissing("shop_purchases", "request_id", "TEXT");
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_purchase_request ON shop_purchases(telegram_id,request_id) WHERE request_id IS NOT NULL"); } catch (e) { console.error("Could not create purchase idempotency index:", e.message); }
+migrate(db);
+
+function sun(micro) { return Number(micro || 0) / MICRO_PER_SUN; }
+function getMicro(id) {
+  const row = db.prepare("SELECT sun_micro,points FROM users WHERE telegram_id=?").get(id);
+  return Number(row?.sun_micro ?? Number(row?.points || 0) * MICRO_PER_SUN);
+}
+function creditMicro(id, delta, description) {
+  if (!Number.isSafeInteger(delta)) throw new Error("Invalid balance delta.");
+  const current = getMicro(id);
+  const next = current + delta;
+  if (next < 0) throw new Error("Insufficient SUN balance.");
+  db.prepare("UPDATE users SET sun_micro=?, points=CAST(? / 1000000 AS INTEGER) WHERE telegram_id=?").run(next, next, id);
+  db.prepare("INSERT INTO ledger(telegram_id,delta,delta_micro,description,created_at) VALUES(?,?,?,?,?)").run(id, Math.trunc(delta / 1000000), delta, description, now());
+  if (delta > 0) db.prepare("INSERT INTO leaderboard_events(telegram_id,amount_micro,kind,created_at) VALUES(?,?,?,?)").run(id, delta, description.slice(0,80), now());
+  return next;
+}
 
 const now = () => new Date().toISOString();
 const utcDay = () => new Date().toISOString().slice(0, 10);
@@ -137,31 +158,9 @@ function addLedger(id, delta, description) {
   db.prepare("INSERT INTO ledger(telegram_id,delta,description,created_at) VALUES(?,?,?,?)")
     .run(id, delta, description, now());
 }
-function verifyTelegramInitData(initData) {
-  if (!BOT_TOKEN) throw new Error("Server is missing BOT_TOKEN.");
-  if (!initData || typeof initData !== "string") throw new Error("Open this app from Telegram.");
-  const params = new URLSearchParams(initData);
-  const hash = params.get("hash");
-  if (!hash || !/^[a-f0-9]{64}$/i.test(hash)) throw new Error("Telegram initData hash is invalid.");
-  params.delete("hash");
-  const authDate = Number(params.get("auth_date") || 0);
-  const seconds = Math.floor(Date.now() / 1000);
-  if (!Number.isSafeInteger(authDate) || authDate <= 0 || authDate > seconds + 60 || seconds - authDate > 3600) {
-    throw new Error("Telegram session expired. Reopen the app.");
-  }
-  const dataCheckString = [...params.entries()].sort(([a],[b]) => a.localeCompare(b))
-    .map(([k,v]) => `${k}=${v}`).join("\n");
-  const secret = crypto.createHmac("sha256", "WebAppData").update(BOT_TOKEN).digest();
-  const calculated = crypto.createHmac("sha256", secret).update(dataCheckString).digest("hex");
-  const a = Buffer.from(calculated, "hex"), b = Buffer.from(hash, "hex");
-  if (a.length !== b.length || !crypto.timingSafeEqual(a,b)) throw new Error("Telegram signature verification failed.");
-  let user;
-  try { user = JSON.parse(params.get("user") || "null"); } catch { throw new Error("Telegram user data is invalid."); }
-  if (!user || !user.id || !validId(String(user.id))) throw new Error("Telegram user ID is missing.");
-  return { user, startParam: params.get("start_param") || "" };
-}
+function verifyTelegramRequest(initData) { return verifyTelegramInitData(initData, BOT_TOKEN); }
 function auth(req,res,next) {
-  try { req.telegram = verifyTelegramInitData(req.get("X-Telegram-Init-Data")); next(); }
+  try { req.telegram = verifyTelegramRequest(req.get("X-Telegram-Init-Data")); next(); }
   catch (e) { res.status(401).json({error:e.message}); }
 }
 function isAdmin(req,res,next) {
@@ -220,12 +219,11 @@ function rewardEligibleReferral(referredId) {
   if (!referred || !referred.referred_by || referred.channel_verified !== 1) return false;
   return db.transaction(() => {
     if (!db.prepare("SELECT telegram_id FROM users WHERE telegram_id=?").get(referred.referred_by)) return false;
-    const inserted = db.prepare(`INSERT OR IGNORE INTO referral_rewards(referred_id,referrer_id,points,created_at) VALUES(?,?,?,?)`)
-      .run(referred.telegram_id,referred.referred_by,REFERRAL_POINTS,now());
+    const inserted = db.prepare(`INSERT OR IGNORE INTO referral_rewards(referred_id,referrer_id,points,reward_micro,created_at) VALUES(?,?,?,?,?)`)
+      .run(referred.telegram_id,referred.referred_by,REFERRAL_POINTS,REFERRAL_POINTS * MICRO_PER_SUN,now());
     if (!inserted.changes) return false;
     if (REFERRAL_POINTS > 0) {
-      db.prepare("UPDATE users SET points=points+? WHERE telegram_id=?").run(REFERRAL_POINTS,referred.referred_by);
-      addLedger(referred.referred_by,REFERRAL_POINTS,"Eligible referral bonus");
+      creditMicro(referred.referred_by, REFERRAL_POINTS * MICRO_PER_SUN, "Eligible referral bonus");
     }
     return true;
   })();
@@ -274,8 +272,8 @@ const defaultShopItems = [
   {id:"tap_upgrade_5",title:"Tap Power +5",description:"A bigger permanent boost for active players.",cost:1000,category:"upgrade",effect:"tap_power",quantity:5}
 ];
 for (const item of defaultShopItems) {
-  db.prepare(`INSERT OR IGNORE INTO shop_items(id,title,description,cost,category,effect,quantity,active,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,1,?,?)`).run(item.id,item.title,item.description,item.cost,item.category,item.effect,item.quantity,now(),now());
+  db.prepare(`INSERT OR IGNORE INTO shop_items(id,title,description,cost,cost_micro,category,effect,quantity,active,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?, ?,1,?,?)`).run(item.id,item.title,item.description,item.cost,item.cost * MICRO_PER_SUN,item.category,item.effect,item.quantity,now(),now());
 }
 function getShopItems(activeOnly = true) {
   return db.prepare(`SELECT id,title,description,cost,category,effect,quantity,active FROM shop_items ${activeOnly ? "WHERE active=1" : ""} ORDER BY category DESC,title COLLATE NOCASE`).all();
@@ -348,7 +346,7 @@ app.get("/api/me",auth,async(req,res)=>{
     const referralCount=getReferralCount(user.telegram_id);
     res.json({
       user:{id:user.telegram_id,first_name:user.first_name,username:user.username,photo_url:user.photo_url,
-        points:user.points,created_at:user.created_at,vip:isVip(user),vipExpiry:user.vip_until,
+        points:user.points,sun_micro:getMicro(user.telegram_id),created_at:user.created_at,vip:isVip(user),vipExpiry:user.vip_until,
         energy:user.energy,energyMax:MAX_ENERGY,tapPower:user.tap_power,seeds:user.seeds,spinTickets:user.spin_tickets,
         plant:{unlocked:isPlantUnlocked(user),stage:user.plant_stage,growth:user.plant_growth},referral_count:referralCount},
       tasks:[],ledger,referralLink,referralCount,channel:{configured:channel.configured,member:channel.member},
@@ -363,8 +361,7 @@ app.post("/api/checkin",auth,(req,res)=>{
   const tx=db.transaction(()=>{
     const inserted=db.prepare("INSERT OR IGNORE INTO checkins(telegram_id,day) VALUES(?,?)").run(user.telegram_id,utcDay());
     if(!inserted.changes) return false;
-    db.prepare("UPDATE users SET points=points+? WHERE telegram_id=?").run(DAILY_POINTS,user.telegram_id);
-    addLedger(user.telegram_id,DAILY_POINTS,"Daily check-in"); return true;
+    creditMicro(user.telegram_id, DAILY_POINTS * MICRO_PER_SUN, "Daily check-in"); return true;
   });
   if(!tx()) return res.status(409).json({error:"Daily check-in already claimed today."});
   res.json({ok:true,points:DAILY_POINTS,message:`Daily check-in: +${DAILY_POINTS} SUN`});
@@ -373,15 +370,15 @@ app.post("/api/checkin",auth,(req,res)=>{
 app.post("/api/tap",auth,(req,res)=>{
   const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
   updateEnergy(user);
-  const earned=db.transaction(()=>{
-    const fresh=db.prepare("SELECT energy,tap_power FROM users WHERE telegram_id=?").get(user.telegram_id);
-    if(!fresh || fresh.energy<1) throw new Error("No energy left. Wait for energy to regenerate.");
-    const points=Math.max(1,Math.min(100,Number(fresh.tap_power)||1));
-    db.prepare("UPDATE users SET energy=energy-1,points=points+? WHERE telegram_id=?").run(points,user.telegram_id);
-    addLedger(user.telegram_id,points,"Tap to Earn"); return points;
-  });
-  try { const points=earned(); res.json({ok:true,earned:points,message:`+${points} SUN`}); }
-  catch(e) { res.status(429).json({error:e.message}); }
+  try {
+    const earned=db.transaction(()=>{
+      const fresh=db.prepare("SELECT energy FROM users WHERE telegram_id=?").get(user.telegram_id);
+      if(!fresh || fresh.energy<1) throw new Error("No energy left. Wait for energy to regenerate.");
+      db.prepare("UPDATE users SET energy=energy-1 WHERE telegram_id=?").run(user.telegram_id);
+      return creditMicro(user.telegram_id, 1000, "Tap to Earn (0.001 SUN)");
+    })();
+    res.json({ok:true,earned:0.001,balance:sun(earned),message:"+0.001 SUN"});
+  } catch(e) { res.status(429).json({error:e.message}); }
 });
 
 app.post("/api/plant/verify",auth,async(req,res)=>{
@@ -398,11 +395,10 @@ app.post("/api/plant/buy-seed",auth,(req,res)=>{
     db.transaction(()=>{
       const item=db.prepare("SELECT * FROM shop_items WHERE id='seed' AND active=1 AND effect='seed'").get();
       if(!item)throw new Error("Plant seeds are not available in the shop right now.");
-      const debit=db.prepare("UPDATE users SET points=points-?,seeds=seeds+? WHERE telegram_id=? AND points>=?")
-        .run(item.cost,item.quantity,user.telegram_id,item.cost);
-      if(!debit.changes)throw new Error(`You need ${item.cost} SUN to buy a seed.`);
+      if(getMicro(user.telegram_id) < item.cost * MICRO_PER_SUN) throw new Error(`You need ${item.cost} SUN to buy a seed.`);
+      creditMicro(user.telegram_id, -item.cost * MICRO_PER_SUN, `Bought plant seed: ${item.title}`);
+      db.prepare("UPDATE users SET seeds=seeds+? WHERE telegram_id=?").run(item.quantity,user.telegram_id);
       addInventory(user.telegram_id,"seed",item.quantity);
-      addLedger(user.telegram_id,-item.cost,`Bought plant seed: ${item.title}`);
       db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at) VALUES(?,?,?,?)").run(user.telegram_id,item.id,item.cost,now());
     })(); res.json({ok:true,message:"Seed purchased."});
   } catch(e){res.status(400).json({error:e.message});}
@@ -426,9 +422,9 @@ app.post("/api/plant/water",auth,(req,res)=>{
       const fresh=db.prepare("SELECT points,plant_stage,plant_growth FROM users WHERE telegram_id=?").get(user.telegram_id);
       if(fresh.plant_stage<1)throw new Error("Plant a seed first.");
       if(fresh.plant_growth>=100)throw new Error("Your plant is ready to harvest.");
-      if(fresh.points<WATER_COST)throw new Error(`You need ${WATER_COST} SUN to water your plant.`);
-      db.prepare("UPDATE users SET points=points-?,plant_growth=? WHERE telegram_id=?").run(WATER_COST,Math.min(100,fresh.plant_growth+25),user.telegram_id);
-      addLedger(user.telegram_id,-WATER_COST,"Watered plant");
+      if(getMicro(user.telegram_id) < WATER_COST * MICRO_PER_SUN)throw new Error(`You need ${WATER_COST} SUN to water your plant.`);
+      creditMicro(user.telegram_id, -WATER_COST * MICRO_PER_SUN, "Watered plant");
+      db.prepare("UPDATE users SET plant_growth=? WHERE telegram_id=?").run(Math.min(100,fresh.plant_growth+25),user.telegram_id);
     })();res.json({ok:true,message:"Plant watered. Growth increased."});
   }catch(e){res.status(400).json({error:e.message});}
 });
@@ -439,8 +435,8 @@ app.post("/api/plant/harvest",auth,(req,res)=>{
     db.transaction(()=>{
       const fresh=db.prepare("SELECT plant_stage,plant_growth FROM users WHERE telegram_id=?").get(user.telegram_id);
       if(fresh.plant_stage<1||fresh.plant_growth<100)throw new Error("Your plant is not ready to harvest.");
-      db.prepare("UPDATE users SET points=points+?,plant_stage=0,plant_growth=0,plant_planted_at=NULL WHERE telegram_id=?").run(reward,user.telegram_id);
-      addLedger(user.telegram_id,reward,"Plant harvest");
+      creditMicro(user.telegram_id, reward * MICRO_PER_SUN, "Plant harvest");
+      db.prepare("UPDATE users SET plant_stage=0,plant_growth=0,plant_planted_at=NULL WHERE telegram_id=?").run(user.telegram_id);
     })();res.json({ok:true,reward,message:`Harvest complete: +${reward} SUN`});
   }catch(e){res.status(400).json({error:e.message});}
 });
@@ -471,11 +467,10 @@ app.post("/api/shop/buy",auth,claimLimiter,(req,res)=>{
       const item=db.prepare("SELECT * FROM shop_items WHERE id=? AND active=1").get(itemId);
       if(!item)throw new Error("This shop item is unavailable.");
       if(!Number.isSafeInteger(item.cost)||item.cost<0)throw new Error("Invalid shop item price.");
-      const fresh=db.prepare("SELECT points,energy,tap_power FROM users WHERE telegram_id=?").get(user.telegram_id);
-      if(!fresh || fresh.points<item.cost)throw new Error("Not enough SUN points.");
-      // Deduct points conditionally inside the same SQLite transaction to prevent race-based overspending.
-      const debit=db.prepare("UPDATE users SET points=points-? WHERE telegram_id=? AND points>=?").run(item.cost,user.telegram_id,item.cost);
-      if(!debit.changes)throw new Error("Not enough SUN points.");
+      const fresh=db.prepare("SELECT energy,tap_power FROM users WHERE telegram_id=?").get(user.telegram_id);
+      if(!fresh || getMicro(user.telegram_id) < item.cost * MICRO_PER_SUN)throw new Error("Not enough SUN points.");
+      // Debit the canonical micro-SUN balance inside the same SQLite transaction.
+      creditMicro(user.telegram_id, -item.cost * MICRO_PER_SUN, `Shop purchase: ${item.title}`);
       switch(item.effect){
         case "seed":
           db.prepare("UPDATE users SET seeds=seeds+? WHERE telegram_id=?").run(item.quantity,user.telegram_id);
@@ -492,14 +487,13 @@ app.post("/api/shop/buy",auth,claimLimiter,(req,res)=>{
           addInventory(user.telegram_id,item.id,item.quantity); break;
         default: throw new Error("This item has an unsupported effect. Ask admin to edit it.");
       }
-      addLedger(user.telegram_id,-item.cost,`Shop purchase: ${item.title}`);
-      const purchase=db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,created_at,request_id) VALUES(?,?,?,?,?)")
-        .run(user.telegram_id,item.id,item.cost,now(),requestId||null);
+      const purchase=db.prepare("INSERT INTO shop_purchases(telegram_id,item_id,cost,cost_micro,created_at,request_id) VALUES(?,?,?,?,?,?)")
+        .run(user.telegram_id,item.id,item.cost,item.cost * MICRO_PER_SUN,now(),requestId||null);
       return {duplicate:false,purchase:{id:Number(purchase.lastInsertRowid),item_id:item.id,cost:item.cost},item};
     })();
     if(result.duplicate)return res.json({ok:true,duplicate:true,message:"This purchase was already processed.",purchase:result.purchase});
-    const fresh=db.prepare("SELECT points,seeds,spin_tickets,tap_power,energy FROM users WHERE telegram_id=?").get(user.telegram_id);
-    res.json({ok:true,message:`${result.item.title} purchased successfully.`,purchase:result.purchase,balance:fresh.points,inventory:{seeds:fresh.seeds,spinTickets:fresh.spin_tickets,tapPower:fresh.tap_power,energy:fresh.energy}});
+    const fresh=db.prepare("SELECT seeds,spin_tickets,tap_power,energy FROM users WHERE telegram_id=?").get(user.telegram_id);
+    res.json({ok:true,message:`${result.item.title} purchased successfully.`,purchase:result.purchase,balanceMicro:getMicro(user.telegram_id),balance:sun(getMicro(user.telegram_id)),inventory:{seeds:fresh.seeds,spinTickets:fresh.spin_tickets,tapPower:fresh.tap_power,energy:fresh.energy}});
   }catch(e){
     if(String(e.code||"").startsWith("SQLITE_CONSTRAINT"))return res.status(409).json({error:"This purchase request has already been processed."});
     res.status(400).json({error:e.message});
@@ -519,7 +513,7 @@ app.post("/api/spin",auth,(req,res)=>{
       if(inv && inv.quantity>0) removeInventory(user.telegram_id,"spin_ticket",1);
       let roll=crypto.randomInt(total),reward=rewards[0];
       for(const r of rewards){if(roll<r.weight){reward=r;break;}roll-=r.weight;}
-      if(reward.points>0){db.prepare("UPDATE users SET points=points+? WHERE telegram_id=?").run(reward.points,user.telegram_id);addLedger(user.telegram_id,reward.points,"Spin reward");}
+      if(reward.points>0) creditMicro(user.telegram_id, reward.points * MICRO_PER_SUN, "Spin reward");
       return reward.points;
     })();
     res.json({ok:true,points,message:points?`You won ${points} SUN points.`:"No points this time. Try again with another ticket."});
@@ -530,23 +524,16 @@ app.get("/api/vip",auth,(req,res)=>{
   res.json({vip:isVip(user),vipExpiry:user.vip_until||null,message:isVip(user)?"Active VIP membership.":"No active VIP membership."});
 });
 app.post("/api/withdrawals",auth,(req,res)=>{
-  const user=getOrCreateUser(req.telegram.user,req.telegram.startParam);
-  if(!isVip(user))return res.status(403).json({error:"An active VIP membership is required to request withdrawal."});
-  const points=Number(req.body?.points),method=String(req.body?.method||"manual_review");
+  const user=getOrCreateUser(req.telegram.user,req.telegram.startParam); const policy=db.prepare("SELECT * FROM withdrawal_policies WHERE id=1").get();
+  const amount=req.body?.amount!==undefined?toMicro(req.body.amount):toMicro(Number(req.body?.points||0)/1000000); const method=String(req.body?.method||"manual_review");
   const methods=["manual_review","TON","USDT","KBZPay","WavePay"];
-  if(!Number.isSafeInteger(points)||points<MIN_WITHDRAWAL)return res.status(400).json({error:`Minimum request is ${MIN_WITHDRAWAL} points.`});
+  if(!Number.isSafeInteger(amount)||amount<policy.min_micro||amount>policy.max_micro)return res.status(400).json({error:`Withdrawal must be between ${sun(policy.min_micro)} and ${sun(policy.max_micro)} SUN.`});
   if(!methods.includes(method))return res.status(400).json({error:"Unsupported method."});
-  try {
-    const id=db.transaction(()=>{
-      const fresh=db.prepare("SELECT points,vip_until FROM users WHERE telegram_id=?").get(user.telegram_id);
-      if(!isVip(fresh))throw new Error("An active VIP membership is required.");
-      if(fresh.points<points)throw new Error("Not enough points.");
-      db.prepare("UPDATE users SET points=points-? WHERE telegram_id=?").run(points,user.telegram_id);
-      const result=db.prepare("INSERT INTO withdrawals(telegram_id,points,method,status,created_at) VALUES(?,?,?,'pending',?)").run(user.telegram_id,points,method,now());
-      addLedger(user.telegram_id,-points,`Withdrawal request #${result.lastInsertRowid}`);
-      return result.lastInsertRowid;
-    })();res.json({ok:true,id,message:"Request submitted for manual review. Payout is not guaranteed."});
-  }catch(e){res.status(400).json({error:e.message});}
+  if(policy.vip_required && !isVip(user))return res.status(403).json({error:"An active VIP membership is required to request withdrawal."});
+  const since=new Date(Date.now()-86400000).toISOString(); const used=db.prepare("SELECT COALESCE(SUM(amount_micro),0) amount FROM withdrawals WHERE telegram_id=? AND created_at>=? AND status<>'rejected'").get(user.telegram_id,since).amount;
+  if(used+amount>policy.daily_max_micro)return res.status(400).json({error:"Daily withdrawal limit reached."});
+  const usd=amount/MICRO_PER_SUN*Number(policy.usd_per_sun||0); const mmk=usd*Number(policy.mmk_per_usd||0);
+  try { const id=db.transaction(()=>{ if(getMicro(user.telegram_id)<amount)throw new Error("Not enough SUN."); creditMicro(user.telegram_id,-amount,`Withdrawal request`); const result=db.prepare("INSERT INTO withdrawals(telegram_id,points,amount_micro,method,payout_details,usd_estimate,mmk_estimate,status,created_at) VALUES(?,?,?, ?,?,?,?,'pending',?)").run(user.telegram_id,Math.trunc(amount/1000000),amount,method,String(req.body?.payoutDetails||"").slice(0,500),usd,mmk,now()); return result.lastInsertRowid; })(); res.json({ok:true,id,amount:sun(amount),usdEstimate:usd,mmkEstimate:mmk,message:"Request submitted for manual review. Payout is not guaranteed."}); } catch(e){res.status(400).json({error:e.message});}
 });
 
 // -------------------- Dynamic Tasks --------------------
@@ -583,6 +570,23 @@ app.get("/api/social-links",(req,res)=>{
   res.json({links:db.prepare("SELECT id,title,url FROM social_links WHERE active=1 ORDER BY title COLLATE NOCASE").all()});
 });
 
+
+// -------------------- Fractional economy, mining, VIP, inbox and rankings --------------------
+app.get("/api/inbox",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const rows=db.prepare("SELECT id,title,body,kind,read_at,created_at FROM notifications WHERE telegram_id IS NULL OR telegram_id=? ORDER BY id DESC LIMIT 100").all(u.telegram_id); res.json({unread:rows.filter(x=>!x.read_at).length,notifications:rows}); });
+app.post("/api/inbox/:id/read",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); db.prepare("UPDATE notifications SET read_at=? WHERE id=? AND (telegram_id IS NULL OR telegram_id=?)").run(now(),Number(req.params.id),u.telegram_id); res.json({ok:true}); });
+app.get("/api/economy",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const balance=getMicro(u.telegram_id); const policy=db.prepare("SELECT * FROM withdrawal_policies WHERE id=1").get(); const settings=Object.fromEntries(db.prepare("SELECT key,value FROM app_settings").all().map(x=>[x.key,x.value])); res.json({balanceMicro:balance,balance:sun(balance),sunUsdRate:Number(settings.sun_usd_rate||0.001),ticker:settings.ticker||"",withdrawalPolicy:policy}); });
+app.get("/api/vip/levels",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const active=db.prepare("SELECT level,expires_at FROM vip_memberships WHERE telegram_id=? AND expires_at>? ORDER BY level DESC LIMIT 1").get(u.telegram_id,now()); res.json({levels:db.prepare("SELECT level,name,price_micro,reward_micro,duration_days,frame,withdrawal_multiplier FROM vip_levels ORDER BY level").all().map(x=>({...x,price:sun(x.price_micro),reward:sun(x.reward_micro)})),active:active||null}); });
+app.post("/api/vip/buy",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const level=Number(req.body?.level); try { const result=db.transaction(()=>{ const v=db.prepare("SELECT * FROM vip_levels WHERE level=?").get(level); if(!v) throw new Error("VIP level not found."); if(getMicro(u.telegram_id)<v.price_micro) throw new Error("Not enough SUN."); creditMicro(u.telegram_id,-v.price_micro,`VIP ${level} membership`); const expires=new Date(Date.now()+v.duration_days*86400000).toISOString(); db.prepare("INSERT INTO vip_memberships(telegram_id,level,starts_at,expires_at) VALUES(?,?,?,?)").run(u.telegram_id,level,now(),expires); return expires; })(); res.json({ok:true,level,expiresAt:result}); } catch(e){res.status(400).json({error:e.message});} });
+app.get("/api/piggy-bank",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); res.json(db.prepare("SELECT deposited_micro,deposited_micro/1000000.0 AS deposited FROM piggy_banks WHERE telegram_id=?").get(u.telegram_id)||{deposited_micro:0,deposited:0}); });
+app.post("/api/piggy-bank/deposit",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const amount=toMicro(req.body?.amount); try { db.transaction(()=>{ creditMicro(u.telegram_id,-amount,"Piggy bank deposit"); db.prepare("INSERT INTO piggy_banks(telegram_id,deposited_micro,updated_at) VALUES(?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET deposited_micro=deposited_micro+excluded.deposited_micro,updated_at=excluded.updated_at").run(u.telegram_id,amount,now()); })(); res.json({ok:true}); } catch(e){res.status(400).json({error:e.message});} });
+app.post("/api/piggy-bank/withdraw",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); try { const amount=db.transaction(()=>{ const b=db.prepare("SELECT deposited_micro FROM piggy_banks WHERE telegram_id=?").get(u.telegram_id); if(!b||b.deposited_micro<1) throw new Error("Piggy bank is empty."); db.prepare("UPDATE piggy_banks SET deposited_micro=0,updated_at=? WHERE telegram_id=?").run(now(),u.telegram_id); creditMicro(u.telegram_id,b.deposited_micro,"Piggy bank withdrawal"); return b.deposited_micro; })(); res.json({ok:true,amount:sun(amount)}); } catch(e){res.status(400).json({error:e.message});} });
+app.post("/api/mining/start",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const existing=db.prepare("SELECT id FROM mining_sessions WHERE telegram_id=? AND stopped_at IS NULL").get(u.telegram_id); if(existing) return res.status(409).json({error:"Mining session already active."}); const result=db.prepare("INSERT INTO mining_sessions(telegram_id,started_at) VALUES(?,?)").run(u.telegram_id,now()); res.json({ok:true,id:Number(result.lastInsertRowid),rate:0.0001,maxSeconds:7200}); });
+app.post("/api/mining/claim",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); try { const amount=db.transaction(()=>{ const m=db.prepare("SELECT * FROM mining_sessions WHERE telegram_id=? AND stopped_at IS NULL ORDER BY id DESC LIMIT 1").get(u.telegram_id); if(!m) throw new Error("No active mining session."); const elapsed=Math.min(7200,Math.max(0,(Date.now()-Date.parse(m.started_at))/1000)); const accrued=Math.floor(elapsed*100); const remaining=Math.max(0,accrued-m.claimed_micro); db.prepare("UPDATE mining_sessions SET claimed_micro=?,stopped_at=CASE WHEN ? >= 7200 THEN ? ELSE stopped_at END WHERE id=?").run(accrued,elapsed,now(),m.id); if(remaining) creditMicro(u.telegram_id,remaining,"Mining reward"); return remaining; })(); res.json({ok:true,earned:sun(amount),earnedMicro:amount}); } catch(e){res.status(400).json({error:e.message});} });
+app.get("/api/treasure-boxes",auth,(req,res)=>res.json({boxes:db.prepare("SELECT level,name,cost_micro,reward_min_micro,reward_max_micro FROM treasure_boxes WHERE active=1 ORDER BY level").all().map(x=>({...x,cost:sun(x.cost_micro),rewardMin:sun(x.reward_min_micro),rewardMax:sun(x.reward_max_micro)}))}));
+app.post("/api/treasure-boxes/:level/open",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const level=Number(req.params.level); try { const reward=db.transaction(()=>{ const b=db.prepare("SELECT * FROM treasure_boxes WHERE level=? AND active=1").get(level); if(!b) throw new Error("Treasure box not found."); if(getMicro(u.telegram_id)<b.cost_micro) throw new Error("Not enough SUN."); const amount=b.reward_min_micro+crypto.randomInt(b.reward_max_micro-b.reward_min_micro+1); creditMicro(u.telegram_id,-b.cost_micro,`Opened treasure box ${level}`); creditMicro(u.telegram_id,amount,`Treasure box ${level} reward`); db.prepare("INSERT INTO treasure_openings(telegram_id,level,reward_micro,created_at) VALUES(?,?,?,?)").run(u.telegram_id,level,amount,now()); return amount; })(); res.json({ok:true,reward:sun(reward),rewardMicro:reward}); } catch(e){res.status(400).json({error:e.message});} });
+app.post("/api/gift-codes/redeem",auth,(req,res)=>{ const u=getOrCreateUser(req.telegram.user,req.telegram.startParam); const code=String(req.body?.code||"").trim().toUpperCase(); try { const reward=db.transaction(()=>{ const g=db.prepare("SELECT * FROM gift_codes WHERE code=? AND active=1").get(code); if(!g||g.redeemed_count>=g.max_redemptions||(g.expires_at&&Date.parse(g.expires_at)<Date.now())) throw new Error("Gift code is invalid or exhausted."); if(db.prepare("SELECT 1 FROM gift_redemptions WHERE code=? AND telegram_id=?").get(code,u.telegram_id)) throw new Error("Gift code already redeemed."); db.prepare("INSERT INTO gift_redemptions(code,telegram_id,redeemed_at) VALUES(?,?,?)").run(code,u.telegram_id,now()); db.prepare("UPDATE gift_codes SET redeemed_count=redeemed_count+1 WHERE code=?").run(code); creditMicro(u.telegram_id,g.reward_micro,`Gift code ${code}`); return g.reward_micro; })(); res.json({ok:true,reward:sun(reward)}); } catch(e){res.status(400).json({error:e.message});} });
+app.get("/api/leaderboard/:period",auth,(req,res)=>{ const period=String(req.params.period); if(!["daily","monthly","yearly"].includes(period)) return res.status(400).json({error:"Invalid period."}); const modifier=period==="daily"?"-1 day":period==="monthly"?"-1 month":"-1 year"; const rows=db.prepare("SELECT e.telegram_id,u.first_name,u.username,SUM(e.amount_micro) amount_micro FROM leaderboard_events e JOIN users u ON u.telegram_id=e.telegram_id WHERE e.created_at>=datetime('now',?) GROUP BY e.telegram_id ORDER BY amount_micro DESC,e.telegram_id LIMIT 100").all(modifier); res.json({period,rows:rows.map((x,i)=>({...x,rank:i+1,amount:sun(x.amount_micro)}))}); });
+app.get("/api/events",(req,res)=>res.json({events:db.prepare("SELECT * FROM events WHERE active=1 AND (starts_at IS NULL OR starts_at<=?) AND (ends_at IS NULL OR ends_at>=?) ORDER BY updated_at DESC").all(now(),now()),ticker:db.prepare("SELECT value FROM app_settings WHERE key='ticker'").get()?.value||""}));
 // -------------------- Admin APIs --------------------
 const validShopEffect = new Set(["seed","spin_ticket","energy_refill","tap_power","inventory"]);
 function validateShopItemBody(body, old = null) {
@@ -610,8 +614,8 @@ app.get("/api/admin/shop-items",isAdmin,(req,res)=>res.json({items:getShopItems(
 app.post("/api/admin/shop-items",isAdmin,(req,res)=>{
   let item;try{item=validateShopItemBody(req.body);}catch(e){return res.status(400).json({error:e.message});}
   try{
-    db.prepare(`INSERT INTO shop_items(id,title,description,cost,category,effect,quantity,active,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(item.id,item.title,item.description,item.cost,item.category,item.effect,item.quantity,item.active,now(),now());
+    db.prepare(`INSERT INTO shop_items(id,title,description,cost,cost_micro,category,effect,quantity,active,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(item.id,item.title,item.description,item.cost,item.cost * MICRO_PER_SUN,item.category,item.effect,item.quantity,item.active,now(),now());
     res.status(201).json({ok:true,item});
   }catch(e){if(String(e.code||"").startsWith("SQLITE_CONSTRAINT"))return res.status(409).json({error:"Card ID already exists."});res.status(500).json({error:"Could not create shop card."});}
 });
@@ -619,8 +623,8 @@ app.patch("/api/admin/shop-items/:id",isAdmin,(req,res)=>{
   const id=req.params.id;if(!validTaskId(id))return res.status(400).json({error:"Invalid card ID."});
   const old=db.prepare("SELECT * FROM shop_items WHERE id=?").get(id);if(!old)return res.status(404).json({error:"Shop card not found."});
   let item;try{item=validateShopItemBody(req.body,old);}catch(e){return res.status(400).json({error:e.message});}
-  db.prepare(`UPDATE shop_items SET title=?,description=?,cost=?,category=?,effect=?,quantity=?,active=?,updated_at=? WHERE id=?`)
-    .run(item.title,item.description,item.cost,item.category,item.effect,item.quantity,item.active,now(),id);
+  db.prepare(`UPDATE shop_items SET title=?,description=?,cost=?,cost_micro=?,category=?,effect=?,quantity=?,active=?,updated_at=? WHERE id=?`)
+    .run(item.title,item.description,item.cost,item.cost * MICRO_PER_SUN,item.category,item.effect,item.quantity,item.active,now(),id);
   res.json({ok:true,item});
 });
 app.delete("/api/admin/shop-items/:id",isAdmin,(req,res)=>{
@@ -649,7 +653,7 @@ app.post("/api/admin/tasks",isAdmin,(req,res)=>{
   if(!title||title.length>120||description.length>1000)return res.status(400).json({error:"Invalid task title or description."});
   if(url&&!validateHttpsUrl(url))return res.status(400).json({error:"Task URL must be HTTPS."});
   if(!Number.isSafeInteger(points)||points<0||points>1000000)return res.status(400).json({error:"Invalid task reward."});
-  try{db.prepare("INSERT INTO managed_tasks(id,title,description,url,points,verification,active,created_at,updated_at) VALUES(?,?,?,?,?,'manual',1,?,?)").run(id,title,description,url,points,now(),now());res.status(201).json({ok:true,id});}
+  try{db.prepare("INSERT INTO managed_tasks(id,title,description,url,points,reward_micro,verification,active,created_at,updated_at) VALUES(?,?,?,?,?,?,'manual',1,?,?)").run(id,title,description,url,points,points * MICRO_PER_SUN,now(),now());res.status(201).json({ok:true,id});}
   catch(e){if(String(e.code||"").startsWith("SQLITE_CONSTRAINT"))return res.status(409).json({error:"Task ID already exists."});res.status(500).json({error:"Could not create task."});}
 });
 app.patch("/api/admin/tasks/:id",isAdmin,(req,res)=>{
@@ -660,7 +664,7 @@ app.patch("/api/admin/tasks/:id",isAdmin,(req,res)=>{
   if(url&&!validateHttpsUrl(url))return res.status(400).json({error:"Invalid HTTPS URL."});
   if(!Number.isSafeInteger(points)||points<0||points>1000000)return res.status(400).json({error:"Invalid reward."});
   if(![0,1,true,false].includes(active))return res.status(400).json({error:"active must be true or false."});
-  db.prepare("UPDATE managed_tasks SET title=?,description=?,url=?,points=?,active=?,updated_at=? WHERE id=?").run(title,description,url,points,Number(Boolean(active)),now(),id);
+  db.prepare("UPDATE managed_tasks SET title=?,description=?,url=?,points=?,reward_micro=?,active=?,updated_at=? WHERE id=?").run(title,description,url,points,points * MICRO_PER_SUN,Number(Boolean(active)),now(),id);
   res.json({ok:true});
 });
 app.delete("/api/admin/tasks/:id",isAdmin,(req,res)=>{
@@ -687,8 +691,7 @@ app.post("/api/admin/task-claims/:id",isAdmin,(req,res)=>{
         const task=db.prepare("SELECT points FROM managed_tasks WHERE id=?").get(claim.task_id);
         if(!task)throw new Error("Task no longer exists.");
         if(!db.prepare("SELECT telegram_id FROM users WHERE telegram_id=?").get(claim.telegram_id))throw new Error("User not found.");
-        db.prepare("UPDATE users SET points=points+? WHERE telegram_id=?").run(task.points,claim.telegram_id);
-        if(task.points>0)addLedger(claim.telegram_id,task.points,`Task reward: ${claim.task_id}`);
+        if(task.points>0) creditMicro(claim.telegram_id, task.points * MICRO_PER_SUN, `Task reward: ${claim.task_id}`);
       }
       db.prepare("UPDATE managed_task_claims SET status=?,reviewed_at=?,reviewed_by='admin' WHERE id=?").run(status,now(),claimId);
     })();res.json({ok:true,status});
@@ -720,20 +723,15 @@ app.delete("/api/admin/social-links/:id",isAdmin,(req,res)=>{
   res.json({ok:true});
 });
 app.get("/api/admin/withdrawals",isAdmin,(req,res)=>{
-  res.json(db.prepare("SELECT id,telegram_id,points,method,status,created_at FROM withdrawals ORDER BY id DESC LIMIT 100").all());
+  res.json(db.prepare("SELECT id,telegram_id,points,amount_micro,method,status,created_at FROM withdrawals ORDER BY id DESC LIMIT 100").all());
 });
 app.post("/api/admin/withdrawals/:id",isAdmin,(req,res)=>{
   const id=Number(req.params.id),status=String(req.body?.status||"");
   if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:"Invalid request ID."});
   if(!["approved","rejected"].includes(status))return res.status(400).json({error:"Status must be approved or rejected."});
   try{
-    db.transaction(()=>{
-      const w=db.prepare("SELECT * FROM withdrawals WHERE id=?").get(id);
-      if(!w)throw new Error("Request not found.");
-      if(w.status!=="pending")throw new Error("Request already reviewed.");
-      db.prepare("UPDATE withdrawals SET status=? WHERE id=?").run(status,id);
-      if(status==="rejected"){db.prepare("UPDATE users SET points=points+? WHERE telegram_id=?").run(w.points,w.telegram_id);addLedger(w.telegram_id,w.points,`Refund for rejected request #${id}`);}
-    })();res.json({ok:true,status,note:"Status only; no payment was transferred."});
+    decideWithdrawal(db,{id,status,now,credit:(telegramId,amount,description)=>creditMicro(telegramId,amount,description)});
+    res.json({ok:true,status,note:"Status only; no payment was transferred."});
   }catch(e){res.status(400).json({error:e.message});}
 });
 app.post("/api/admin/users/:id/vip",isAdmin,(req,res)=>{
@@ -748,6 +746,11 @@ app.post("/api/admin/users/:id/vip",isAdmin,(req,res)=>{
   res.json({ok:true,telegram_id:id,vip_until:until,note:"VIP granted by admin; no payment processed."});
 });
 
+
+app.post("/api/admin/gift-codes",isAdmin,(req,res)=>{ const code=String(req.body?.code||"").trim().toUpperCase(); const reward=toMicro(req.body?.reward); const max=Number(req.body?.maxRedemptions||1); if(!/^[A-Z0-9_-]{4,64}$/.test(code)||!Number.isSafeInteger(max)||max<1) return res.status(400).json({error:"Invalid gift code."}); try { db.prepare("INSERT INTO gift_codes(code,reward_micro,max_redemptions,expires_at,created_at) VALUES(?,?,?,?,?)").run(code,reward,max,req.body?.expiresAt||null,now()); res.status(201).json({ok:true,code}); } catch(e){res.status(409).json({error:"Gift code already exists."});} });
+app.post("/api/admin/notifications",isAdmin,(req,res)=>{ const title=String(req.body?.title||"").trim(),body=String(req.body?.body||"").trim(),telegramId=req.body?.telegramId?String(req.body.telegramId):null; if(!title||!body)return res.status(400).json({error:"Title and body are required."}); db.prepare("INSERT INTO notifications(telegram_id,title,body,kind,created_at) VALUES(?,?,?,?,?)").run(telegramId,title,body,String(req.body?.kind||"info"),now()); res.status(201).json({ok:true}); });
+app.patch("/api/admin/settings",isAdmin,(req,res)=>{ const allowed=["sun_usd_rate","ticker","withdrawal_usd_per_sun","mmk_per_usd"]; const update=db.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"); for(const key of allowed) if(req.body?.[key]!==undefined) update.run(key,String(req.body[key]),now()); res.json({ok:true}); });
+app.patch("/api/admin/withdrawal-policy",isAdmin,(req,res)=>{ const p=db.prepare("SELECT * FROM withdrawal_policies WHERE id=1").get(); const vals=["min_micro","max_micro","daily_max_micro","vip_required","usd_per_sun","mmk_per_usd"].map(k=>req.body?.[k]===undefined?p[k]:req.body[k]); if(vals.slice(0,3).some(x=>!Number.isSafeInteger(Number(x))||Number(x)<0))return res.status(400).json({error:"Invalid withdrawal limits."}); db.prepare("UPDATE withdrawal_policies SET min_micro=?,max_micro=?,daily_max_micro=?,vip_required=?,usd_per_sun=?,mmk_per_usd=?,updated_at=? WHERE id=1").run(...vals,now()); res.json({ok:true}); });
 // Safe static hosting and fallback.
 app.use(express.static(__dirname, { index: "index.html" }));
 app.get("*",(req,res)=>res.sendFile(path.join(__dirname,"index.html")));
