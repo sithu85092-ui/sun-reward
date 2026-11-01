@@ -1,74 +1,87 @@
 # SUN REWARD — Telegram Mini App
 
-A Telegram Web App with SUN points, tap-to-earn, daily check-in, referral tracking, task management, social links, shop inventory, upgrade cards, garden/seed planting, TON Connect UI, VIP-gated withdrawal requests, and an admin console.
+SUN REWARD is an existing Telegram Mini App with a SQLite backend, Telegram `initData` authentication, referrals, task review, shop inventory, garden rewards, wallet association, withdrawals, and an admin console. This release extends that system in place; it does not replace the backend or delete `data.sqlite`.
 
-## Features
+## Implemented in this release
 
-- Telegram `initData` HMAC validation on every user API route.
-- SQLite database with additive migrations. Existing `data.sqlite` is retained; do not delete it.
-- Tap-to-earn with regenerating energy and daily check-in.
-- Referral tracking and channel membership checks.
-- Garden: buy seeds, plant, water, harvest; existing 3 eligible referrals + channel membership requirement is preserved.
-- Shop: Plant Seed, Spin Ticket, Energy Refill, Tap Power +1, Tap Power +5.
-- Tasks: admin create/edit/enable/disable; user claims; admin approval/rejection. Rejected tasks can be resubmitted.
-- Social links: admin add/edit/enable/disable/delete.
-- TON Connect wallet UI with server-side address association to the Telegram account.
-- VIP-gated withdrawal request queue with manual admin review. Approving a request does not send money.
-- Rate limiting, Helmet, HTTPS URL validation, timing-safe admin key comparison, SQLite transactions for balance changes.
+- Telegram Mini App HMAC authentication with session freshness validation.
+- Existing profile, integer points compatibility, referrals, channel checks, garden, task review, shop, inventory, spin, TON wallet association, and withdrawal-review flows preserved.
+- Fixed-point SUN balances: **1 SUN = 1,000,000 micro-SUN**. Tap rewards are exactly `0.001 SUN`; mining accrues `0.0001 SUN/second` for a maximum of two hours.
+- Versioned, idempotent migrations in `migrations.js`; existing integer balances are backfilled as `old_points × 1,000,000` without rounding.
+- Configurable SUN/USD rate, MMK/USD estimate, withdrawal minimum/maximum/daily limits, ticker, and VIP-required policy.
+- Inbox notifications with unread count and read state.
+- Ten VIP levels with price, reward, duration, withdrawal multiplier, and profile-frame identifiers.
+- Piggy Bank deposit and withdrawal.
+- Mining start/claim with server-side timing and a two-hour cap.
+- Ten treasure-box levels with server-side randomized reward ranges and opening audit records.
+- Gift-code creation (admin) and idempotent redemption (user).
+- Daily, monthly, and yearly Top 100 leaderboards based on server-side reward events.
+- Events/ticker API and a responsive Android-friendly dark navy/gold Rewards Lab UI.
+- KBZPay and WavePay withdrawal methods with stored USD and MMK estimates. Approval remains manual; no payment is automatically sent.
 
-## Requirements
+## Database migration safety
 
-- Node.js 20+
-- A Telegram bot token and bot username
-- A public HTTPS deployment URL for Telegram Mini App and TON Connect manifest
+Back up the production SQLite files before deployment:
 
-## Setup
+```bash
+cp data.sqlite data.sqlite.before-sun-reward-$(date +%Y%m%d%H%M%S).sqlite
+cp data.sqlite-wal data.sqlite-wal.before-sun-reward-$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+cp data.sqlite-shm data.sqlite-shm.before-sun-reward-$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+```
 
-1. Back up the current database before replacing project files: copy `data.sqlite` somewhere safe.
-2. Install dependencies: `npm install`.
-3. Copy `.env.example` to `.env` and fill in `BOT_TOKEN`, `BOT_USERNAME`, a long random `ADMIN_KEY`, and `REQUIRED_CHANNEL`.
-4. Deploy behind HTTPS. Set `TON_CONNECT_MANIFEST_URL` to the public HTTPS URL of `tonconnect-manifest.json`.
-5. Edit `tonconnect-manifest.json`: replace `https://your-domain.example` with your actual public domain and set a real publicly reachable app icon URL. The manifest must be reachable without login.
-6. Run `npm start`.
-7. Configure your Telegram bot's Main Mini App URL to the deployed HTTPS URL. The bot must be able to check membership in `REQUIRED_CHANNEL` (typically the bot needs appropriate channel permissions).
-8. Open the Mini App from Telegram. API authentication intentionally rejects ordinary browser sessions without valid Telegram `initData`.
-9. Enter the admin key in Admin Console to create tasks and social links. Keep the key only in `.env`; never place it in frontend code or public repositories.
+On startup, the migration creates `schema_migrations`, adds micro-SUN columns, backfills old integer values, and creates feature tables. It is additive and rerunnable. Legacy integer updates are synchronized to micro-SUN while preserving any fractional remainder. Never delete `data.sqlite`, and never run tests against the production database.
 
-## Wallet notes
+The isolated migration test uses an in-memory SQLite database and verifies legacy balance conversion, idempotent reruns, ten VIP levels, ten treasure boxes, and fractional-unit preservation.
 
-TON Connect requires a public manifest URL and an HTTPS app domain. The app stores the address reported by TON Connect against the authenticated Telegram user. This address association is not a payment transaction, does not transfer funds, and is not by itself a server-verified TON Connect proof for high-value payouts. Add proof verification and payout reconciliation before using the address for financial authorization.
+## Local setup
 
-## Database safety
+Requirements: Node.js 20+, npm, and a public HTTPS URL when running inside Telegram.
 
-- Keep the existing `data.sqlite` file when deploying an update.
-- Schema changes use `ALTER TABLE ... ADD COLUMN` only when a column is missing.
-- Back up the database before production changes.
+```bash
+npm install
+cp .env.example .env
+# edit .env; never commit it
+npm run check
+npm test
+npm start
+```
 
-## Important payout note
+Open the app from the Telegram bot. Ordinary browser sessions are intentionally rejected by protected user APIs unless they provide valid Telegram `initData`.
 
-Withdrawal requests are records for manual review. Marking a request approved in the admin panel only changes its status; it does not transfer TON, USDT, KBZPay, or WavePay funds.
+## Environment variables
 
+Required production values are `BOT_TOKEN`, `BOT_USERNAME`, `ADMIN_KEY`, and usually `REQUIRED_CHANNEL`. Never place `BOT_TOKEN` or `ADMIN_KEY` in frontend code, screenshots, Git, or a public ZIP. `TON_CONNECT_MANIFEST_URL` may point to a public HTTPS manifest; the server fallback derives a manifest from the request host for development.
 
-## Secure shop purchase & inventory APIs
+Reward-economy settings in `.env.example` include:
 
-Shop cards are now stored in SQLite (`shop_items`) and can be managed from the Admin console. Purchases are processed on the server in a SQLite transaction: the server looks up the active price, conditionally deducts SUN, applies an allowlisted effect, records the ledger entry and purchase record, and updates inventory. A client-supplied `requestId` is stored with a unique per-user index to prevent the same request from deducting SUN twice on retry.
+- `SUN_USD_RATE` — display conversion rate.
+- `WITHDRAWAL_USD_PER_SUN` and `MMK_PER_USD` — payout estimates.
+- `MIN_WITHDRAWAL_MICRO`, `MAX_WITHDRAWAL_MICRO`, and `DAILY_WITHDRAWAL_MICRO` — fixed-point limits.
+- `VIP_REQUIRED_FOR_WITHDRAWAL` — `0` or `1`.
+- `TICKER_TEXT` — default ticker text.
 
-- `GET /api/shop` — active cards and the signed-in user's inventory summary.
-- `GET /api/inventory` — signed-in user's item inventory; cannot query another user.
-- `POST /api/shop/buy` — body: `{ "itemId": "seed", "requestId": "unique-request-id" }`.
-- `GET /api/admin/shop-items` — list cards (admin key required).
-- `POST /api/admin/shop-items` — create a card (admin key required).
-- `PATCH /api/admin/shop-items/:id` — edit price/title/description/category/effect/quantity/visibility.
-- `DELETE /api/admin/shop-items/:id` — disables a card rather than deleting purchase history or inventory.
-- `GET /api/admin/shop-purchases` — recent purchase audit history.
-- `GET /api/admin/inventory/:telegramId` — inspect a user's inventory (admin key required).
+Admin API calls require `X-Admin-Key`; the key is never returned by the server. Configure notifications, gift codes, settings, and withdrawal policy only from a controlled admin environment.
 
-Allowed effects are `seed`, `spin_ticket`, `energy_refill`, `tap_power`, and `inventory`. `inventory` grants a collectible inventory entry; it does not execute arbitrary code or arbitrary database updates. Admin must use a unique card ID. Do not expose `ADMIN_KEY` in public code or screenshots.
+## Render deployment runbook — review before production
 
-### Existing database compatibility
+This project is not deployed by this task. Before a production rollout:
 
-New tables and the nullable `shop_purchases.request_id` column are created/migrated automatically without deleting the existing `data.sqlite`. Back up `data.sqlite` before deployment. Existing default card IDs and current prices are inserted only when missing, so admin changes are not overwritten on restart. The original `users.seeds` and `users.spin_tickets` counters remain supported while new purchases also create inventory records.
+1. Create and verify a database backup and a restore copy.
+2. Confirm the Render service has persistent disk storage for `data.sqlite`; without persistent storage, user data will be lost on restart.
+3. Set all required environment variables in Render's secret environment configuration.
+4. Deploy the reviewed working branch through your normal change-control process, not by force-pushing `main`.
+5. Check `/health`, then inspect migration version and `PRAGMA integrity_check` on the restored copy.
+6. Open the Mini App from Telegram and test authentication, fractional tap, mining cap, inbox, withdrawal estimates, and admin review with a non-production test account.
+7. Only after explicit approval should a production deployment be triggered.
 
-### Verification status
+## Tests and evidence
 
-`node --check server.js` and `node --check app.js` pass. Full integration tests were not run in this environment because the `better-sqlite3` package is not installed here; run `npm install` and test purchases on a backed-up development database before production use.
+`npm run check` validates `server.js`, `app.js`, and `migrations.js`. `npm test` runs isolated authentication, migration/arithmetic, and withdrawal state-transition tests against in-memory/test-safe fixtures. A local runtime smoke test also verified `/health`, the dynamic TON manifest, the Rewards Lab HTML marker, migration version 2, the trigger, ten VIP levels, ten treasure boxes, and withdrawal columns.
+
+## Honest limitations
+
+- Withdrawal approval changes status and refund behavior only; it does not transfer KBZPay, WavePay, TON, USDT, or other funds.
+- VIP purchase is an internal SUN debit; no paid checkout or external payment verification is included.
+- “Manual” task verification remains manual because no external social-platform verification API was supplied.
+- Telegram timestamp validation uses Unix seconds and rejected withdrawal refunds use the exact stored micro-SUN amount exactly once. The existing single-file SQLite architecture remains single-writer oriented. Multi-instance scaling and high-volume production use require a separately approved database migration and operational design.
+- The admin surface still uses the existing shared `ADMIN_KEY` model. It is timing-safe but is not a full named-admin/RBAC/MFA system; hardening that model should precede high-value financial operations.

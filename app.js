@@ -172,6 +172,7 @@
       $('connection').innerHTML = '<i></i> Connected'; $('connection').classList.remove('error'); $('connection').classList.add('connected');
       const user = data.user;
       $('points').textContent = Number(user.points || 0).toLocaleString();
+      if (data.user.sun_micro !== undefined && $('fractionalBalance')) $('fractionalBalance').textContent = `${(Number(data.user.sun_micro)/1000000).toFixed(3)} SUN`;
       $('shopBalance').textContent = Number(user.points || 0).toLocaleString();
       $('greeting').textContent = user.first_name || 'SUN Player';
       $('energy').textContent = user.energy; $('energyMax').textContent = user.energyMax;
@@ -224,7 +225,7 @@
   $('harvestButton').addEventListener('click', () => action('/api/plant/harvest'));
   $('verifyPlantButton').addEventListener('click', () => action('/api/plant/verify'));
   $('withdrawPoints').addEventListener('input', () => { $('withdrawPoints').dataset.touched = '1'; });
-  $('withdrawButton').addEventListener('click', () => action('/api/withdrawals', { points: Number($('withdrawPoints').value), method: $('withdrawMethod').value }));
+  $('withdrawButton').addEventListener('click', () => action('/api/withdrawals', { amount: $('withdrawPoints').value, method: $('withdrawMethod').value }));
   $('copyReferralButton').addEventListener('click', async () => {
     if (!$('referralLink').value) return show('Referral link unavailable. Set BOT_USERNAME in server settings.', true);
     try { await navigator.clipboard.writeText($('referralLink').value); show('Referral link copied.'); }
@@ -325,8 +326,25 @@
     if (!withdrawals.length) wRoot.append(el('p', 'empty-state', 'No withdrawal requests yet.'));
     withdrawals.forEach(w => {
       const card = itemCard(`Request #${w.id} · User ${w.telegram_id}`, `${w.points} points · ${w.method} · ${w.status}`);
-      if (w.status === 'pending') { const actions = el('div', 'actions'); actions.append(button('Mark approved', async () => { try { await api(`/api/admin/withdrawals/${w.id}`, { method: 'POST', body: JSON.stringify({ status: 'approved' }) }); show('Marked approved; no payment was sent.'); await loadAdmin(); } catch (e) { show(e.message, true); } })); actions.append(button('Reject + refund', async () => { try { await api(`/api/admin/withdrawals/${w.id}`, { method: 'POST', body: JSON.stringify({ status: 'rejected' }) }); show('Rejected and points refunded.'); await loadAdmin(); await loadMe(); } catch (e) { show(e.message, true); } })); card.append(actions); } wRoot.append(card);
+      if (w.status === 'pending') { const actions = el('div', 'actions'); actions.append(button('Mark approved', async () => { try { await api(`/api/admin/withdrawals/${w.id}`, { method: 'POST', body: JSON.stringify({ status: 'approved' }) }); show('Marked approved; no payment was sent.'); await loadAdmin(); } catch (e) { show(e.message, true); } })); actions.append(button('Reject + refund', async () => { try { await api(`/api/admin/withdrawals/${w.id}`, { method: 'POST', body: JSON.stringify({ status: 'rejected' }) }); show('Rejected and exact SUN refunded.'); await loadAdmin(); await loadMe(); } catch (e) { show(e.message, true); } })); card.append(actions); } wRoot.append(card);
     });
   }
-  loadMe(); initTonConnect();
+  async function loadRewards(){
+    try{
+      const [eco,piggy,vip,boxes,inbox]=await Promise.all([api('/api/economy'),api('/api/piggy-bank'),api('/api/vip/levels'),api('/api/treasure-boxes'),api('/api/inbox')]);
+      if($('fractionalBalance')) $('fractionalBalance').textContent=`${Number(eco.balance||0).toFixed(3)} SUN`;
+      if($('sunUsdEstimate')) $('sunUsdEstimate').textContent=`≈ $${(Number(eco.balance||0)*Number(eco.sunUsdRate||0)).toFixed(4)} USD`;
+      if($('piggyBalance')) $('piggyBalance').textContent=`${(Number(piggy.deposited_micro||0)/1000000).toFixed(3)} SUN`;
+      const vipRoot=$('vipLevels'); if(vipRoot){vipRoot.replaceChildren(); vip.levels.forEach(v=>{const c=itemCard(`${v.name} · ${v.frame}`,`${Number(v.price).toFixed(3)} SUN · ${Number(v.reward).toFixed(3)} SUN reward · ${v.duration_days} days`); c.append(button('Activate',()=>action('/api/vip/buy',{level:v.level}),'button button-gold')); vipRoot.append(c);});}
+      const boxRoot=$('treasureBoxes'); if(boxRoot){boxRoot.replaceChildren(); boxes.boxes.forEach(b=>{const c=itemCard(`${b.name}`,`${Number(b.cost).toFixed(3)} SUN · reward ${Number(b.rewardMin).toFixed(3)}–${Number(b.rewardMax).toFixed(3)} SUN`); c.append(button('Open box',()=>action(`/api/treasure-boxes/${b.level}/open`),'button button-primary')); boxRoot.append(c);});}
+      const ir=$('inbox'); if(ir){ir.replaceChildren(); $('inboxUnread').textContent=`${inbox.unread} unread`; (inbox.notifications||[]).forEach(n=>{const c=itemCard(n.title,n.body); if(!n.read_at)c.append(button('Mark read',async()=>{await api(`/api/inbox/${n.id}/read`,{method:'POST',body:'{}'});loadRewards();})); ir.append(c);}); if(!inbox.notifications.length)ir.append(el('p','empty-state','No notifications yet.'));}
+    }catch(e){console.warn('Rewards unavailable',e.message);}
+  }
+  $('startMiningButton')?.addEventListener('click',()=>action('/api/mining/start'));
+  $('claimMiningButton')?.addEventListener('click',()=>action('/api/mining/claim'));
+  $('piggyDepositButton')?.addEventListener('click',()=>action('/api/piggy-bank/deposit',{amount:$('piggyAmount').value}));
+  $('piggyWithdrawButton')?.addEventListener('click',()=>action('/api/piggy-bank/withdraw'));
+  $('redeemGiftButton')?.addEventListener('click',()=>action('/api/gift-codes/redeem',{code:$('giftCode').value}));
+  document.querySelectorAll('.leaderboard-tab').forEach(b=>b.addEventListener('click',async()=>{try{const d=await api(`/api/leaderboard/${b.dataset.period}`);$('leaderboard').replaceChildren(...d.rows.map(x=>el('div','activity-row',`#${x.rank} ${x.first_name||x.telegram_id} · ${Number(x.amount).toFixed(3)} SUN`)));}catch(e){show(e.message,true);}}));
+  loadMe(); initTonConnect(); loadRewards();
 })();

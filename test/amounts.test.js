@@ -1,0 +1,13 @@
+"use strict";
+const assert = require("node:assert/strict");
+const { toMicro } = require("../amounts");
+assert.equal(toMicro("0.001"), 1000);
+assert.equal(toMicro("42.123456"), 42123456);
+assert.equal(toMicro("1e-6"), 1);
+assert.equal(toMicro("1000000"), 1000000000000);
+assert.equal(toMicro("0.001000"), 1000);
+assert.throws(() => toMicro("0.0000001"), /more than 6 decimal places/);
+assert.throws(() => toMicro("-1"), /Invalid SUN amount/);
+assert.throws(() => toMicro("9000000000000.000001"), /Invalid SUN amount/);
+assert.throws(() => toMicro("not-a-number"), /Invalid SUN amount/);
+console.log("amount parsing tests: ok");
