@@ -1,0 +1,49 @@
+
+> sun-reward@1.1.0 test
+> node --test test/*.test.js
+
+TAP version 13
+# amount parsing tests: ok
+# Subtest: test/amounts.test.js
+ok 1 - test/amounts.test.js
+  ---
+  duration_ms: 54.41157
+  type: 'test'
+  ...
+# authentication tests: ok
+# Subtest: test/auth.test.js
+ok 2 - test/auth.test.js
+  ---
+  duration_ms: 81.690356
+  type: 'test'
+  ...
+# migration tests: ok
+# Subtest: test/migrations.test.js
+ok 3 - test/migrations.test.js
+  ---
+  duration_ms: 76.983759
+  type: 'test'
+  ...
+# staging migration rollback tests: ok
+# Subtest: test/staging-integrity.test.js
+ok 4 - test/staging-integrity.test.js
+  ---
+  duration_ms: 69.376248
+  type: 'test'
+  ...
+# withdrawal tests: ok
+# Subtest: test/withdrawals.test.js
+ok 5 - test/withdrawals.test.js
+  ---
+  duration_ms: 65.529571
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 102.187919

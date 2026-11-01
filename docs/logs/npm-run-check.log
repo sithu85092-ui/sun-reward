@@ -1,0 +1,4 @@
+
+> sun-reward@1.1.0 check
+> node --check server.js && node --check app.js && node --check migrations.js
+
